@@ -13,6 +13,7 @@ from evo_rlt.adapters.lerobot.record.runner import (
     _patch_skip_policyless_reset_loop,
     build_default_collect_record_argv,
     build_segment_record_argv,
+    build_vla_only_record_argv,
 )
 
 
@@ -532,3 +533,62 @@ def test_default_collect_argv_accepts_headless_default_episode_success():
 
     assert "--default_episode_success=success" in argv
     assert "--require_episode_success_label=true" in argv
+
+
+
+def test_vla_only_parser_uses_deployed_checkpoint_by_default():
+    parser = build_parser()
+    args = parser.parse_args(["vla-only"])
+
+    assert args.policy_path.endswith("vla_online_base_0528_rec_20260610_filtered_lr1e5_ep2")
+    assert args.dataset_tag == "vla_online_base_0528_ft"
+    assert args.device == "cuda"
+    assert args.dtype == "bfloat16"
+    assert args.n_action_steps is None
+    assert args.preflight is True
+    assert args.pedal_outcome is False
+
+
+def test_vla_only_record_argv_does_not_deploy_rlt_policy():
+    args = SimpleNamespace(
+        policy_path="/models/vla-ft",
+        task="task",
+        num_episodes=1,
+        episode_time_s=3000,
+        reset_time_s=None,
+        fps=30,
+        vcodec="h264",
+        device="cuda",
+        dtype="bfloat16",
+        n_action_steps=25,
+        pedal_outcome=False,
+        default_episode_success=None,
+        teleop_toggle_key="space",
+        play_sounds=False,
+    )
+    setup = SimpleNamespace(
+        followers=[{"port": "left"}, {"port": "right"}],
+        left_cameras={},
+        right_cameras={},
+    )
+    paths = SimpleNamespace(
+        dataset_name="local/vla_only",
+        dataset_root="/tmp/vla_only",
+    )
+
+    argv = build_vla_only_record_argv(
+        args=args,
+        setup=setup,
+        paths=paths,
+        cal_dir="/tmp/cal",
+        teleop_argv=["--teleop.type=bi_so_leader"],
+    )
+
+    assert "--policy.path=/models/vla-ft" in argv
+    assert "--policy.device=cuda" in argv
+    assert "--policy.dtype=bfloat16" in argv
+    assert "--policy.n_action_steps=25" in argv
+    assert "--policy_sync_to_teleop=true" in argv
+    assert not any(item.startswith("--rlt.") for item in argv)
+    assert not any("rl_token" in item for item in argv)
+    assert not any("vla_pretrained_path" in item for item in argv)

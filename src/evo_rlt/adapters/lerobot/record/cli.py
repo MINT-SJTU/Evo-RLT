@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import sys
 
-from evo_rlt.adapters.lerobot.record.runner import run_collect, run_full, run_live, run_segment
+from evo_rlt.adapters.lerobot.record.runner import run_collect, run_full, run_live, run_segment, run_vla_only
 
 
 DEFAULT_COLLECT_DATASET_TAG = "vla_rlt_vla_test"
 DEFAULT_COLLECT_TASK = "Insert the copper screw into the black sleeve."
+DEFAULT_VLA_ONLY_POLICY_PATH = "/home/kye/rlt_deploy/vla_online_base_0528_rec_20260610_filtered_lr1e5_ep2"
+DEFAULT_VLA_ONLY_DATASET_TAG = "vla_online_base_0528_ft"
 
 
 def add_common_record_args(parser: argparse.ArgumentParser) -> None:
@@ -90,6 +92,31 @@ def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--dry-run", action="store_true", default=False)
 
 
+def add_vla_only_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--policy-path", default=DEFAULT_VLA_ONLY_POLICY_PATH)
+    parser.add_argument("--task", default=DEFAULT_COLLECT_TASK)
+    parser.add_argument("--num-episodes", type=int, default=1)
+    parser.add_argument("--episode-time-s", type=int, default=3000)
+    parser.add_argument("--reset-time-s", type=int, default=None)
+    parser.add_argument("--fps", type=int, default=30)
+    parser.add_argument("--setup-json", default=None)
+    parser.add_argument("--dataset-tag", default=DEFAULT_VLA_ONLY_DATASET_TAG)
+    parser.add_argument("--vcodec", default="h264")
+    parser.add_argument("--no-teleop", action="store_true", default=False)
+    parser.add_argument("--teleop-toggle-key", default="space")
+    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--dtype", default="bfloat16")
+    parser.add_argument("--n-action-steps", type=int, default=None)
+    parser.add_argument("--preflight", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--pedal-outcome", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--episode-outcome-key", default="r")
+    parser.add_argument("--double-tap-window-s", type=float, default=0.6)
+    parser.add_argument("--default-episode-success", choices=["success", "failure"], default=None)
+    parser.add_argument("--play-sounds", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--log-level", default="INFO")
+    parser.add_argument("--dry-run", action="store_true", default=False)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Unified real-robot recording entrypoint")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -105,6 +132,13 @@ def build_parser() -> argparse.ArgumentParser:
         action_queue_default=30,
     )
     collect.set_defaults(func=run_collect)
+
+    vla_only = subparsers.add_parser(
+        "vla-only",
+        help="Run a fine-tuned VLA directly on the real robot without RLT policy wrapping.",
+    )
+    add_vla_only_args(vla_only)
+    vla_only.set_defaults(func=run_vla_only)
 
     segment = subparsers.add_parser(
         "segment",
@@ -161,6 +195,13 @@ def main(argv: list[str] | None = None) -> None:
 def collect_default_main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     main(["collect", *args])
+
+
+def vla_only_main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="Fine-tuned VLA-only real-robot inference")
+    add_vla_only_args(parser)
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+    run_vla_only(args)
 
 
 if __name__ == "__main__":

@@ -801,6 +801,106 @@ def run_full(args: argparse.Namespace) -> None:
         leader_cal_dir.cleanup()
 
 
+def run_vla_only(args: argparse.Namespace) -> None:
+    set_offline_env()
+    setup = load_robot_setup(args.setup_json)
+    paths = resolve_run_paths(setup.setup, args.dataset_tag, "eval_vla_only")
+    configure_logging(paths.log_file, args.log_level)
+    remove_existing_dataset(paths.dataset_root)
+    teleop_argv = build_teleop_argv(setup.leaders, args.no_teleop)
+
+    if not args.policy_path:
+        raise ValueError("VLA-only inference requires --policy-path")
+    if args.preflight:
+        log.info("VLA-only preflight is enabled")
+
+    leader_cal_dir = None
+    with TemporaryDirectory(prefix="record-vla-only-") as cal_dir:
+        stage_follower_calibrations(setup.followers, cal_dir)
+        leader_cal_dir = stage_leader_calibrations(setup.leaders, teleop_argv)
+        if not args.dry_run and args.preflight:
+            preflight_motor_connections(
+                setup.followers,
+                setup.leaders if teleop_argv else [],
+                cal_dir,
+                leader_cal_dir.name if leader_cal_dir is not None else None,
+            )
+
+        sys.argv = build_vla_only_record_argv(args, setup, paths, cal_dir, teleop_argv)
+        print_vla_only_summary(args, paths, bool(teleop_argv))
+        if args.dry_run:
+            print("\nDry run argv:")
+            print(" ".join(sys.argv))
+            return
+
+        prepare_lerobot_runtime(
+            double_tap_episode_outcome_key=(
+                args.episode_outcome_key if args.pedal_outcome else None
+            ),
+            double_tap_episode_outcome_window_s=(
+                args.double_tap_window_s if args.pedal_outcome else None
+            ),
+            intervention_toggle_key=args.teleop_toggle_key,
+            background_episode_video_encoding=True,
+        )
+        from evo_rlt.adapters.lerobot.record.backend import record
+
+        record()
+
+    if leader_cal_dir is not None:
+        leader_cal_dir.cleanup()
+
+
+def build_vla_only_record_argv(
+    args: argparse.Namespace,
+    setup,
+    paths,
+    cal_dir: str,
+    teleop_argv: list[str],
+) -> list[str]:
+    policy_argv = [
+        f"--policy.path={args.policy_path}",
+        f"--policy.device={args.device}",
+        f"--policy.dtype={args.dtype}",
+    ]
+    if args.n_action_steps is not None:
+        policy_argv.append(f"--policy.n_action_steps={args.n_action_steps}")
+
+    sync_to_teleop = "true" if teleop_argv else "false"
+    play_sounds = "true" if args.play_sounds else "false"
+    return [
+        "record_vla_only",
+        *build_robot_argv(setup.followers, setup.left_cameras, setup.right_cameras, cal_dir),
+        *teleop_argv,
+        *policy_argv,
+        *build_dataset_argv(
+            dataset_name=paths.dataset_name,
+            dataset_root=paths.dataset_root,
+            task=args.task,
+            num_episodes=args.num_episodes,
+            episode_time_s=args.episode_time_s,
+            fps=args.fps,
+            vcodec=args.vcodec,
+        ),
+        *build_reset_time_argv(args),
+        *_episode_outcome_argv(args.pedal_outcome, getattr(args, "default_episode_success", None)),
+        "--intervention_state_machine_enabled=true",
+        f"--intervention_toggle_key={_keyboard_key_arg(args.teleop_toggle_key)}",
+        f"--policy_sync_to_teleop={sync_to_teleop}",
+        f"--play_sounds={play_sounds}",
+    ]
+
+
+def print_vla_only_summary(args: argparse.Namespace, paths, teleop_enabled: bool) -> None:
+    print("\nVLA-only real-robot inference")
+    print(f"Dataset: {paths.dataset_name} -> {paths.dataset_root}")
+    print(f"Log: {paths.log_file}")
+    print(f"Policy: {args.policy_path}")
+    print(f"Device: {args.device}, dtype: {args.dtype}")
+    print(f"Teleop intervention: enabled={teleop_enabled} key={args.teleop_toggle_key}")
+    print("RLT: disabled")
+
+
 def run_live(args: argparse.Namespace) -> None:
     set_offline_env()
     setup = load_robot_setup(args.setup_json)
