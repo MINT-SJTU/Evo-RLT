@@ -865,6 +865,14 @@ def build_vla_only_record_argv(
     ]
     if args.n_action_steps is not None:
         policy_argv.append(f"--policy.n_action_steps={args.n_action_steps}")
+    if args.rtc:
+        policy_argv.extend([
+            "--policy.rtc_config.enabled=true",
+            f"--policy.rtc_config.execution_horizon={args.rtc_execution_horizon}",
+            f"--policy.rtc_config.max_guidance_weight={args.rtc_max_guidance_weight}",
+            f"--policy.rtc_config.prefix_attention_schedule={args.rtc_prefix_attention_schedule}",
+            "--policy.rtc_config.debug=" + ("true" if args.rtc_debug else "false"),
+        ])
 
     sync_to_teleop = "true" if teleop_argv else "false"
     play_sounds = "true" if args.play_sounds else "false"
@@ -897,6 +905,12 @@ def print_vla_only_summary(args: argparse.Namespace, paths, teleop_enabled: bool
     print(f"Log: {paths.log_file}")
     print(f"Policy: {args.policy_path}")
     print(f"Device: {args.device}, dtype: {args.dtype}")
+    print(
+        "RTC: "
+        f"enabled={args.rtc} horizon={args.rtc_execution_horizon} "
+        f"guidance={args.rtc_max_guidance_weight} "
+        f"schedule={args.rtc_prefix_attention_schedule} debug={args.rtc_debug}"
+    )
     print(f"Teleop intervention: enabled={teleop_enabled} key={args.teleop_toggle_key}")
     print("RLT: disabled")
 

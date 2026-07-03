@@ -545,6 +545,11 @@ def test_vla_only_parser_uses_deployed_checkpoint_by_default():
     assert args.device == "cuda"
     assert args.dtype == "bfloat16"
     assert args.n_action_steps is None
+    assert args.rtc is True
+    assert args.rtc_execution_horizon == 25
+    assert args.rtc_max_guidance_weight == 10.0
+    assert args.rtc_prefix_attention_schedule == "EXP"
+    assert args.rtc_debug is False
     assert args.preflight is True
     assert args.pedal_outcome is False
 
@@ -561,6 +566,11 @@ def test_vla_only_record_argv_does_not_deploy_rlt_policy():
         device="cuda",
         dtype="bfloat16",
         n_action_steps=25,
+        rtc=True,
+        rtc_execution_horizon=25,
+        rtc_max_guidance_weight=10.0,
+        rtc_prefix_attention_schedule="EXP",
+        rtc_debug=False,
         pedal_outcome=False,
         default_episode_success=None,
         teleop_toggle_key="space",
@@ -588,6 +598,10 @@ def test_vla_only_record_argv_does_not_deploy_rlt_policy():
     assert "--policy.device=cuda" in argv
     assert "--policy.dtype=bfloat16" in argv
     assert "--policy.n_action_steps=25" in argv
+    assert "--policy.rtc_config.enabled=true" in argv
+    assert "--policy.rtc_config.execution_horizon=25" in argv
+    assert "--policy.rtc_config.max_guidance_weight=10.0" in argv
+    assert "--policy.rtc_config.prefix_attention_schedule=EXP" in argv
     assert "--policy_sync_to_teleop=true" in argv
     assert not any(item.startswith("--rlt.") for item in argv)
     assert not any("rl_token" in item for item in argv)

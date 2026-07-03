@@ -107,6 +107,15 @@ def add_vla_only_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="bfloat16")
     parser.add_argument("--n-action-steps", type=int, default=None)
+    parser.add_argument("--rtc", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--rtc-execution-horizon", type=int, default=25)
+    parser.add_argument("--rtc-max-guidance-weight", type=float, default=10.0)
+    parser.add_argument(
+        "--rtc-prefix-attention-schedule",
+        default="EXP",
+        choices=["EXP", "LINEAR", "ONES", "ZEROS"],
+    )
+    parser.add_argument("--rtc-debug", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--preflight", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--pedal-outcome", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--episode-outcome-key", default="r")
