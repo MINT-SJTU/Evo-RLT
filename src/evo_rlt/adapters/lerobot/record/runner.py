@@ -301,8 +301,30 @@ def _patch_record_intervention_toggle_key(toggle_key: str) -> None:
     keyboard_toggle_key = _keyboard_key_arg(toggle_key)
 
     def init_keyboard_listener(*args, **kwargs):
-        kwargs["intervention_toggle_key"] = keyboard_toggle_key
-        return original_init_keyboard_listener(*args, **kwargs)
+        intervention_toggle_key = kwargs.pop("intervention_toggle_key", keyboard_toggle_key)
+        critical_phase_toggle_key = kwargs.pop("critical_phase_toggle_key", None)
+        kwargs.pop("episode_success_key", None)
+        kwargs.pop("episode_failure_key", None)
+        cp_success_key = kwargs.pop("cp_success_key", None)
+        cp_failure_key = kwargs.pop("cp_failure_key", None)
+        rl_phase_key = kwargs.pop("rl_phase_key", None)
+        end_success_key = kwargs.pop("end_success_key", None)
+        end_failure_key = kwargs.pop("end_failure_key", None)
+
+        keyboard_listener, events = original_init_keyboard_listener()
+        _ensure_record_events(events)
+        record_key_bindings = {
+            intervention_toggle_key: "toggle_intervention",
+            critical_phase_toggle_key: "toggle_critical_phase",
+            cp_success_key: "cp_mark_success",
+            cp_failure_key: "cp_mark_failure",
+            rl_phase_key: "start_rl_phase",
+            end_success_key: "end_phase_success",
+            end_failure_key: "end_phase_failure",
+        }
+        pedal_listener = _start_record_event_pedal_listener(events, record_key_bindings)
+        record_event_listener = _start_record_event_keyboard_listener(events, record_key_bindings)
+        return _CompositeListener(keyboard_listener, pedal_listener, record_event_listener), events
 
     init_keyboard_listener._evo_rlt_intervention_key = _event_key_name(toggle_key)
     backend.init_keyboard_listener = init_keyboard_listener
@@ -893,7 +915,7 @@ def build_vla_only_record_argv(
         *build_reset_time_argv(args),
         *_episode_outcome_argv(args.pedal_outcome, getattr(args, "default_episode_success", None)),
         "--intervention_state_machine_enabled=true",
-        f"--intervention_toggle_key={_keyboard_key_arg(args.teleop_toggle_key)}",
+        f"--intervention_toggle_key={_event_key_name(args.teleop_toggle_key)}",
         f"--policy_sync_to_teleop={sync_to_teleop}",
         f"--play_sounds={play_sounds}",
     ]

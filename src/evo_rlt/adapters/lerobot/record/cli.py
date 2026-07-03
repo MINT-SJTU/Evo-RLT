@@ -102,7 +102,14 @@ def add_vla_only_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--setup-json", default=None)
     parser.add_argument("--dataset-tag", default=DEFAULT_VLA_ONLY_DATASET_TAG)
     parser.add_argument("--vcodec", default="h264")
-    parser.add_argument("--no-teleop", action="store_true", default=False)
+    parser.add_argument(
+        "--teleop",
+        dest="no_teleop",
+        action="store_false",
+        default=True,
+        help="Enable leader-arm teleop intervention. Disabled by default for VLA-only inference.",
+    )
+    parser.add_argument("--no-teleop", dest="no_teleop", action="store_true")
     parser.add_argument("--teleop-toggle-key", default="space")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--dtype", default="bfloat16")

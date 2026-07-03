@@ -1,9 +1,12 @@
+from collections import deque
 import sys
 import time
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
+import torch
 
 from evo_rlt.adapters.lerobot.record.cli import build_parser
 from evo_rlt.adapters.lerobot.record import runner
@@ -536,6 +539,61 @@ def test_default_collect_argv_accepts_headless_default_episode_success():
 
 
 
+
+def test_rtc_policy_prediction_uses_action_chunk_queue():
+    from evo_rlt.adapters.lerobot.record.hil import ACPInferenceConfig, _predict_policy_action_with_acp_inference
+
+    class FakePolicy:
+        def __init__(self):
+            self.config = SimpleNamespace(
+                rtc_config=SimpleNamespace(enabled=True, execution_horizon=2),
+                device="cpu",
+                use_amp=False,
+            )
+            self._action_queue = deque()
+            self.chunk_calls = 0
+
+        def select_action(self, batch):
+            raise AssertionError("select_action should not be used when RTC is enabled")
+
+        def predict_action_chunk(self, batch):
+            self.chunk_calls += 1
+            assert batch["task"] == "task"
+            return torch.tensor([[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]])
+
+    policy = FakePolicy()
+    preprocessor = lambda observation: observation
+    postprocessor = lambda action: action
+    observation = {"observation.state": np.array([0.0], dtype=np.float32)}
+
+    first_action = _predict_policy_action_with_acp_inference(
+        observation_frame=observation,
+        policy=policy,
+        device=torch.device("cpu"),
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        use_amp=False,
+        task="task",
+        robot_type="bi_so_follower",
+        acp_inference=ACPInferenceConfig(),
+    )
+    second_action = _predict_policy_action_with_acp_inference(
+        observation_frame=observation,
+        policy=policy,
+        device=torch.device("cpu"),
+        preprocessor=preprocessor,
+        postprocessor=postprocessor,
+        use_amp=False,
+        task="task",
+        robot_type="bi_so_follower",
+        acp_inference=ACPInferenceConfig(),
+    )
+
+    assert policy.chunk_calls == 1
+    assert torch.equal(first_action, torch.tensor([[1.0, 2.0]]))
+    assert torch.equal(second_action, torch.tensor([[3.0, 4.0]]))
+
+
 def test_vla_only_parser_uses_deployed_checkpoint_by_default():
     parser = build_parser()
     args = parser.parse_args(["vla-only"])
@@ -550,8 +608,16 @@ def test_vla_only_parser_uses_deployed_checkpoint_by_default():
     assert args.rtc_max_guidance_weight == 10.0
     assert args.rtc_prefix_attention_schedule == "EXP"
     assert args.rtc_debug is False
+    assert args.no_teleop is True
     assert args.preflight is True
     assert args.pedal_outcome is False
+
+
+def test_vla_only_parser_can_enable_teleop():
+    parser = build_parser()
+    args = parser.parse_args(["vla-only", "--teleop"])
+
+    assert args.no_teleop is False
 
 
 def test_vla_only_record_argv_does_not_deploy_rlt_policy():
@@ -603,6 +669,7 @@ def test_vla_only_record_argv_does_not_deploy_rlt_policy():
     assert "--policy.rtc_config.max_guidance_weight=10.0" in argv
     assert "--policy.rtc_config.prefix_attention_schedule=EXP" in argv
     assert "--policy_sync_to_teleop=true" in argv
+    assert "--intervention_toggle_key=space" in argv
     assert not any(item.startswith("--rlt.") for item in argv)
     assert not any("rl_token" in item for item in argv)
     assert not any("vla_pretrained_path" in item for item in argv)

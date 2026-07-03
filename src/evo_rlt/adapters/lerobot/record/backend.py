@@ -142,6 +142,12 @@ from lerobot.utils.utils import (
 from lerobot.utils.visualization_utils import init_rerun
 
 
+def _decode_control_key(key: str) -> str:
+    if key.lower() == "space":
+        return " "
+    return key
+
+
 @dataclass
 class DatasetRecordConfig:
     # Dataset identifier. By convention it should match '{hf_username}/{dataset_name}' (e.g. `lerobot/test`).
@@ -367,6 +373,7 @@ class RecordConfig:
 
         if self.teleop is None and self.policy is None:
             raise ValueError("Choose a policy, a teleoperator, or enable RLT to control the robot")
+        self.intervention_toggle_key = _decode_control_key(self.intervention_toggle_key)
         if not self.intervention_toggle_key or len(self.intervention_toggle_key) != 1:
             raise ValueError("`intervention_toggle_key` must be a single character.")
 

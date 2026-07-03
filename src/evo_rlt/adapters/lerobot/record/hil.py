@@ -16,7 +16,8 @@
 
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from copy import deepcopy
+from contextlib import nullcontext
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,7 +29,7 @@ from lerobot.processor import PolicyAction, PolicyProcessorPipeline, RobotAction
 from evo_rlt.adapters.lerobot.record.acp_tags import build_acp_tagged_task
 from lerobot.robots import Robot
 from lerobot.teleoperators import Teleoperator
-from lerobot.utils.control_utils import predict_action
+from lerobot.utils.control_utils import predict_action, prepare_observation_for_inference
 
 
 @dataclass
@@ -87,6 +88,57 @@ def _restore_policy_runtime_state(policy: PreTrainedPolicy, state: dict[str, Any
         setattr(policy, key, _clone_runtime_value(value))
 
 
+def _policy_uses_rtc_chunking(policy: PreTrainedPolicy) -> bool:
+    rtc_config = getattr(policy.config, "rtc_config", None)
+    return bool(getattr(rtc_config, "enabled", False))
+
+
+def _rtc_execution_horizon(policy: PreTrainedPolicy, actions: torch.Tensor) -> int:
+    rtc_config = getattr(policy.config, "rtc_config", None)
+    horizon = getattr(rtc_config, "execution_horizon", None)
+    if horizon is None:
+        horizon = actions.shape[1]
+    if horizon <= 0:
+        raise ValueError(f"rtc_config.execution_horizon must be positive, got {horizon}")
+    return min(horizon, actions.shape[1])
+
+
+def _predict_action_with_optional_rtc(
+    *,
+    observation_frame: dict[str, np.ndarray],
+    policy: PreTrainedPolicy,
+    device: torch.device,
+    preprocessor: PolicyProcessorPipeline[dict[str, Any], dict[str, Any]],
+    postprocessor: PolicyProcessorPipeline[PolicyAction, PolicyAction],
+    use_amp: bool,
+    task: str | None,
+    robot_type: str | None,
+) -> PolicyAction:
+    if not _policy_uses_rtc_chunking(policy):
+        return predict_action(
+            observation=observation_frame,
+            policy=policy,
+            device=device,
+            preprocessor=preprocessor,
+            postprocessor=postprocessor,
+            use_amp=use_amp,
+            task=task,
+            robot_type=robot_type,
+        )
+
+    with (
+        torch.inference_mode(),
+        torch.autocast(device_type=device.type) if device.type == "cuda" and use_amp else nullcontext(),
+    ):
+        observation = prepare_observation_for_inference(copy(observation_frame), device, task, robot_type)
+        observation = preprocessor(observation)
+        if len(policy._action_queue) == 0:
+            actions = policy.predict_action_chunk(observation)
+            policy._action_queue.extend(actions[:, : _rtc_execution_horizon(policy, actions)].transpose(0, 1))
+        action = policy._action_queue.popleft()
+        return postprocessor(action)
+
+
 def _predict_policy_action_with_runtime_state(
     *,
     observation_frame: dict[str, np.ndarray],
@@ -100,8 +152,8 @@ def _predict_policy_action_with_runtime_state(
     runtime_state: dict[str, Any],
 ) -> PolicyAction:
     _restore_policy_runtime_state(policy, runtime_state)
-    action = predict_action(
-        observation=observation_frame,
+    action = _predict_action_with_optional_rtc(
+        observation_frame=observation_frame,
         policy=policy,
         device=device,
         preprocessor=preprocessor,
@@ -130,8 +182,8 @@ def _predict_policy_action_with_acp_inference(
     uncond_runtime_state: dict[str, Any] | None = None,
 ) -> PolicyAction:
     if not acp_inference.enable:
-        return predict_action(
-            observation=observation_frame,
+        return _predict_action_with_optional_rtc(
+            observation_frame=observation_frame,
             policy=policy,
             device=device,
             preprocessor=preprocessor,
@@ -143,8 +195,8 @@ def _predict_policy_action_with_acp_inference(
 
     conditional_task = build_acp_tagged_task(task, is_positive=True)
     if not acp_inference.use_cfg:
-        return predict_action(
-            observation=observation_frame,
+        return _predict_action_with_optional_rtc(
+            observation_frame=observation_frame,
             policy=policy,
             device=device,
             preprocessor=preprocessor,
