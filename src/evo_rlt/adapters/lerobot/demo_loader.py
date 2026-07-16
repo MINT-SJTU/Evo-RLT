@@ -12,6 +12,21 @@ from evo_rlt.core.interfaces import Observation
 logger = logging.getLogger(__name__)
 
 
+def parse_episode_success(raw: object, episode_idx: int) -> bool:
+    """Parse the required binary episode outcome stored in dataset metadata."""
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized == "success":
+            return True
+        if normalized == "failure":
+            return False
+    elif isinstance(raw, bool):
+        return raw
+    elif isinstance(raw, (int, float)) and raw in (0, 1):
+        return bool(raw)
+    raise ValueError(f"Unrecognized episode_success value for episode {episode_idx}: {raw!r}")
+
+
 def normalize_quantiles(
     tensor: torch.Tensor, q01: torch.Tensor, q99: torch.Tensor, eps: float = 1e-8,
 ) -> torch.Tensor:
@@ -123,19 +138,7 @@ class RLTDemoDataset(Dataset):
         docs/rlt/rlt_pipeline_review_20260415_1839.md S2-2.
         """
         raw = self._dataset.meta.episodes["episode_success"][episode_idx]
-        if isinstance(raw, str):
-            normalized = raw.strip().lower()
-            if normalized == "success":
-                return True
-            if normalized == "failure":
-                return False
-        elif isinstance(raw, bool):
-            return raw
-        elif isinstance(raw, (int, float)) and raw in (0, 1):
-            return bool(raw)
-        raise ValueError(
-            f"Unrecognized episode_success value for episode {episode_idx}: {raw!r}"
-        )
+        return parse_episode_success(raw, episode_idx)
 
     def __getitem__(self, idx: int) -> dict:
         item = self._dataset[idx]
