@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # 1. Episode splitting
 # ---------------------------------------------------------------------------
-
 def split_episode_indices(
     num_episodes: int,
     train_ratio: float = 0.8,
@@ -42,7 +41,6 @@ def split_episode_indices(
 # ---------------------------------------------------------------------------
 # 2. Core: build transitions from demo batches
 # ---------------------------------------------------------------------------
-
 @torch.no_grad()
 def build_transitions_from_demos(
     policy,
@@ -210,7 +208,6 @@ def build_overlap_frame_indices(
 # ---------------------------------------------------------------------------
 # 3. High-level: precompute buffer from dataset
 # ---------------------------------------------------------------------------
-
 def build_transition_replay_buffer(
     policy,
     demo_dataset_path: str,
@@ -288,7 +285,6 @@ def build_transition_replay_buffer(
 # ---------------------------------------------------------------------------
 # 4. Cache: save / load precomputed transitions
 # ---------------------------------------------------------------------------
-
 def save_transition_cache(
     transitions: list[ChunkTransition], transition_cache_dir: str | Path, split: str,
 ) -> None:
@@ -309,7 +305,9 @@ def save_transition_cache(
         }
         for t in transitions
     ]
-    torch.save(data, path)
+    tmp = path.with_name(f".{path.name}.tmp")
+    torch.save(data, tmp)
+    tmp.replace(path)
     logger.info("Saved %d transitions to %s", len(data), path)
 
 
@@ -329,7 +327,6 @@ def load_transition_cache(
 # ---------------------------------------------------------------------------
 # Private helpers
 # ---------------------------------------------------------------------------
-
 def _subsample_chunk(actions: torch.Tensor, target_len: int) -> torch.Tensor:
     """Take first target_len frames from action trajectory (H, D) -> (target_len, D)."""
     return actions[:target_len]

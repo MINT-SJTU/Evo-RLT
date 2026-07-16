@@ -249,10 +249,11 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
 ### 5) Build Transition Cache
 
 ```bash
-evo-rlt-build-transition-cache-v2 \
+evo-rlt-build-transition-cache \
   --demo-dataset-repo-id <HF_ORG>/<DATASET> \
   --demo-dataset-root <LOCAL_DATASET_ROOT> \
   --rl-token-policy-path outputs/rl_token/checkpoints/last/pretrained_model \
+  --norm-stats-path <RL_TOKEN_NORM_STATS_PATH> \
   --vla-pretrained-path outputs/vla_ft/checkpoints/last/pretrained_model \
   --tokenizer-path /path/to/paligemma-3b-pt-224-snapshot \
   --output-dir outputs/cache \
@@ -265,6 +266,11 @@ evo-rlt-build-transition-cache-v2 \
   --tolerance-s 0.04 \
   --device cuda
 ```
+
+The source dataset must contain an `episode_success` value (`success` or
+`failure`) for every episode. The cache uses sparse binary rewards: only the
+last valid step of a successful terminal chunk receives reward `1`; all other
+steps receive `0`.
 
 <a id="train-chunk-actor-critic"></a>
 

@@ -29,7 +29,6 @@ dev = ["evo-rlt[lerobot,test]", "ruff>=0.6"]
 [project.scripts]
 evo-rlt-build-transition-cache = "evo_rlt.cli.build_transition_cache:main"
 evo-rlt-build-bucket-cache = "evo_rlt.cli.build_bucket_cache:main"
-evo-rlt-build-transition-cache-v2 = "evo_rlt.cli.build_transition_cache_v2:main"
 evo-rlt-compute-token-variance = "evo_rlt.cli.compute_token_variance:main"
 evo-rlt-prepare-mix-buckets = "evo_rlt.cli.prepare_mix_buckets:main"
 evo-rlt-rescale-cache-reward = "evo_rlt.cli.rescale_cache_reward:main"
