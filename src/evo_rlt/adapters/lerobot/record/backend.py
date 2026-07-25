@@ -63,6 +63,7 @@ lerobot-record \
 """
 
 import logging
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from pprint import pformat
@@ -546,6 +547,22 @@ def _configure_rlt_record_policy(policy, cfg: RecordConfig) -> None:
     )
 
 
+def _make_recording_policy(policy_cfg, dataset_meta):
+    """Build a recording policy without initializing weights that a checkpoint will replace."""
+    if policy_cfg is None:
+        return None
+
+    init_context = nullcontext()
+    if policy_cfg.type == "pi05" and policy_cfg.pretrained_path:
+        from transformers import initialization as transformers_initialization
+
+        init_context = transformers_initialization.no_init_weights()
+        logging.info("PI0.5 pretrained load: skipping redundant random weight initialization")
+
+    with init_context:
+        return make_policy(policy_cfg, ds_meta=dataset_meta)
+
+
 @parser.wrap()
 def record(cfg: RecordConfig) -> LeRobotDataset:
     init_logging()
@@ -636,7 +653,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         )
 
         # Load pretrained policy
-        policy = None if cfg.policy is None else make_policy(cfg.policy, ds_meta=dataset.meta)
+        policy = _make_recording_policy(cfg.policy, dataset.meta)
         _configure_rlt_record_policy(policy, cfg)
         preprocessor = None
         postprocessor = None
