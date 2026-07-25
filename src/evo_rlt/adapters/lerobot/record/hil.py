@@ -16,7 +16,6 @@
 
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import nullcontext
 from copy import copy, deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -27,6 +26,7 @@ import torch
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.processor import PolicyAction, PolicyProcessorPipeline, RobotAction
 from evo_rlt.adapters.lerobot.record.acp_tags import build_acp_tagged_task
+from evo_rlt.adapters.lerobot.record.vla_rtc import get_vla_only_rtc_runtime
 from lerobot.robots import Robot
 from lerobot.teleoperators import Teleoperator
 from lerobot.utils.control_utils import predict_action, prepare_observation_for_inference
@@ -93,16 +93,6 @@ def _policy_uses_rtc_chunking(policy: PreTrainedPolicy) -> bool:
     return bool(getattr(rtc_config, "enabled", False))
 
 
-def _rtc_execution_horizon(policy: PreTrainedPolicy, actions: torch.Tensor) -> int:
-    rtc_config = getattr(policy.config, "rtc_config", None)
-    horizon = getattr(rtc_config, "execution_horizon", None)
-    if horizon is None:
-        horizon = actions.shape[1]
-    if horizon <= 0:
-        raise ValueError(f"rtc_config.execution_horizon must be positive, got {horizon}")
-    return min(horizon, actions.shape[1])
-
-
 def _predict_action_with_optional_rtc(
     *,
     observation_frame: dict[str, np.ndarray],
@@ -113,6 +103,7 @@ def _predict_action_with_optional_rtc(
     use_amp: bool,
     task: str | None,
     robot_type: str | None,
+    fps: float,
 ) -> PolicyAction:
     if not _policy_uses_rtc_chunking(policy):
         return predict_action(
@@ -126,16 +117,13 @@ def _predict_action_with_optional_rtc(
             robot_type=robot_type,
         )
 
-    with (
-        torch.inference_mode(),
-        torch.autocast(device_type=device.type) if device.type == "cuda" and use_amp else nullcontext(),
-    ):
+    with torch.no_grad():
         observation = prepare_observation_for_inference(copy(observation_frame), device, task, robot_type)
         observation = preprocessor(observation)
-        if len(policy._action_queue) == 0:
-            actions = policy.predict_action_chunk(observation)
-            policy._action_queue.extend(actions[:, : _rtc_execution_horizon(policy, actions)].transpose(0, 1))
-        action = policy._action_queue.popleft()
+        runtime = get_vla_only_rtc_runtime(
+            policy, stream_id=task, fps=fps, device=device, use_amp=use_amp
+        )
+        action = runtime.select_action(observation)
         return postprocessor(action)
 
 
@@ -150,6 +138,7 @@ def _predict_policy_action_with_runtime_state(
     task: str | None,
     robot_type: str | None,
     runtime_state: dict[str, Any],
+    fps: float,
 ) -> PolicyAction:
     _restore_policy_runtime_state(policy, runtime_state)
     action = _predict_action_with_optional_rtc(
@@ -161,6 +150,7 @@ def _predict_policy_action_with_runtime_state(
         use_amp=use_amp,
         task=task,
         robot_type=robot_type,
+        fps=fps,
     )
     runtime_state.clear()
     runtime_state.update(_capture_policy_runtime_state(policy))
@@ -180,6 +170,7 @@ def _predict_policy_action_with_acp_inference(
     acp_inference: ACPInferenceConfig,
     cond_runtime_state: dict[str, Any] | None = None,
     uncond_runtime_state: dict[str, Any] | None = None,
+    fps: float = 30.0,
 ) -> PolicyAction:
     if not acp_inference.enable:
         return _predict_action_with_optional_rtc(
@@ -191,6 +182,7 @@ def _predict_policy_action_with_acp_inference(
             use_amp=use_amp,
             task=task,
             robot_type=robot_type,
+            fps=fps,
         )
 
     conditional_task = build_acp_tagged_task(task, is_positive=True)
@@ -204,6 +196,7 @@ def _predict_policy_action_with_acp_inference(
             use_amp=use_amp,
             task=conditional_task,
             robot_type=robot_type,
+            fps=fps,
         )
 
     if cond_runtime_state is None or uncond_runtime_state is None:
@@ -220,6 +213,7 @@ def _predict_policy_action_with_acp_inference(
         task=conditional_task,
         robot_type=robot_type,
         runtime_state=cond_runtime_state,
+        fps=fps,
     )
     _set_torch_rng_state(device, cpu_state, cuda_state)
     action_uncond = _predict_policy_action_with_runtime_state(
@@ -232,6 +226,7 @@ def _predict_policy_action_with_acp_inference(
         task=task,
         robot_type=robot_type,
         runtime_state=uncond_runtime_state,
+        fps=fps,
     )
     return action_uncond + acp_inference.cfg_beta * (action_cond - action_uncond)
 

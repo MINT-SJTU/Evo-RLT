@@ -1,4 +1,3 @@
-from collections import deque
 import sys
 import time
 from pathlib import Path
@@ -540,8 +539,9 @@ def test_default_collect_argv_accepts_headless_default_episode_success():
 
 
 
-def test_rtc_policy_prediction_uses_action_chunk_queue():
+def test_rtc_policy_prediction_passes_leftover_chunk_to_background_replan():
     from evo_rlt.adapters.lerobot.record.hil import ACPInferenceConfig, _predict_policy_action_with_acp_inference
+    from evo_rlt.adapters.lerobot.record.vla_rtc import reset_vla_only_rtc_runtimes
 
     class FakePolicy:
         def __init__(self):
@@ -549,15 +549,17 @@ def test_rtc_policy_prediction_uses_action_chunk_queue():
                 rtc_config=SimpleNamespace(enabled=True, execution_horizon=2),
                 device="cpu",
                 use_amp=False,
+                chunk_size=3,
             )
-            self._action_queue = deque()
             self.chunk_calls = 0
+            self.chunk_kwargs = []
 
         def select_action(self, batch):
             raise AssertionError("select_action should not be used when RTC is enabled")
 
-        def predict_action_chunk(self, batch):
+        def predict_action_chunk(self, batch, **kwargs):
             self.chunk_calls += 1
+            self.chunk_kwargs.append(kwargs)
             assert batch["task"] == "task"
             return torch.tensor([[[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]])
 
@@ -589,10 +591,17 @@ def test_rtc_policy_prediction_uses_action_chunk_queue():
         acp_inference=ACPInferenceConfig(),
     )
 
-    assert policy.chunk_calls == 1
     assert torch.equal(first_action, torch.tensor([[1.0, 2.0]]))
     assert torch.equal(second_action, torch.tensor([[3.0, 4.0]]))
-
+    reset_vla_only_rtc_runtimes(policy)
+    assert policy.chunk_calls == 2
+    assert policy.chunk_kwargs[0] == {
+        "inference_delay": 0,
+        "prev_chunk_left_over": None,
+        "execution_horizon": 2,
+    }
+    assert torch.equal(policy.chunk_kwargs[1]["prev_chunk_left_over"], torch.tensor([[5.0, 6.0]]))
+    assert policy.chunk_kwargs[1]["execution_horizon"] == 2
 
 def test_vla_only_parser_uses_deployed_checkpoint_by_default():
     parser = build_parser()

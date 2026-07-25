@@ -46,6 +46,7 @@ from evo_rlt.adapters.lerobot.record.hil import (
     set_teleop_manual_control as apply_teleop_manual_control,
     _predict_policy_action_with_acp_inference,
 )
+from evo_rlt.adapters.lerobot.record.vla_rtc import reset_vla_only_rtc_runtimes
 from lerobot.teleoperators import Teleoperator, koch_leader, omx_leader, so_leader
 from lerobot.teleoperators.keyboard.teleop_keyboard import KeyboardTeleop
 from lerobot.utils.constants import ACTION, OBS_STR
@@ -304,6 +305,7 @@ def record_loop(
         policy.reset()
         preprocessor.reset()
         postprocessor.reset()
+        reset_vla_only_rtc_runtimes(policy)
 
     cond_policy_runtime_state: dict[str, Any] | None = None
     uncond_policy_runtime_state: dict[str, Any] | None = None
@@ -417,6 +419,7 @@ def record_loop(
         policy.reset()
         preprocessor.reset()
         postprocessor.reset()
+        reset_vla_only_rtc_runtimes(policy)
         if acp_inference.enable and acp_inference.use_cfg:
             cond_policy_runtime_state = _capture_policy_runtime_state(policy)
             uncond_policy_runtime_state = _capture_policy_runtime_state(policy)
@@ -700,6 +703,7 @@ def record_loop(
                 acp_inference=acp_inference,
                 cond_runtime_state=cond_policy_runtime_state,
                 uncond_runtime_state=uncond_policy_runtime_state,
+                fps=fps,
             )
             _t_infer = (time.perf_counter() - _t0) * 1000
             act_processed_policy = make_robot_action(policy_action, dataset.features)
