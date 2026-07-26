@@ -11,6 +11,10 @@ def register() -> None:
     This keeps Evo-RLT out of LeRobot source files. Call once before using
     LeRobot factory helpers with policy.type in {rlt, rlt_token, rlt_ac}.
     """
+    from evo_rlt.adapters.lerobot.pi05_image_preprocessing import install_pi05_openpi_resize
+
+    install_pi05_openpi_resize()
+
     global _REGISTERED
     if _REGISTERED:
         return

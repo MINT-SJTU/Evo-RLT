@@ -11,8 +11,9 @@ from lerobot.policies.pi05.modeling_pi05 import (
     PI05Pytorch,
     make_att_2d_masks,
     pad_vector,
-    resize_with_pad_torch,
 )
+
+from evo_rlt.adapters.lerobot.pi05_image_preprocessing import resize_with_pad_pil_uint8
 from evo_rlt.core.interfaces import Observation, VLAOutput
 from evo_rlt.core.utils import postprocess_prefix_tokens
 from evo_rlt.core.vla_adapter import VLAAdapter
@@ -170,7 +171,7 @@ class Pi05VLAAdapter(VLAAdapter):
                 image = image.permute(0, 2, 3, 1)
 
             if image.shape[1:3] != self.pi05_config.image_resolution:
-                image = resize_with_pad_torch(image, image_height, image_width)
+                image = resize_with_pad_pil_uint8(image, image_height, image_width)
 
             image = image * 2.0 - 1.0
 
