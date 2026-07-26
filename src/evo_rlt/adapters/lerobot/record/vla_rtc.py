@@ -6,6 +6,7 @@ import copy
 import logging
 import math
 import time
+from collections import deque
 from contextlib import nullcontext
 from threading import Lock, Thread
 from typing import Any
@@ -15,12 +16,29 @@ from torch import Tensor
 
 from lerobot.policies.pretrained import PreTrainedPolicy
 from lerobot.policies.rtc.action_queue import ActionQueue
-from lerobot.policies.rtc.latency_tracker import LatencyTracker
 
 log = logging.getLogger(__name__)
 
 _RUNTIMES_ATTRIBUTE = "_evo_rlt_vla_rtc_runtimes"
 _INFERENCE_LOCK_ATTRIBUTE = "_evo_rlt_vla_rtc_inference_lock"
+_RECENT_REAL_DELAY_WINDOW = 8
+
+
+class _GuidanceDelayTracker:
+    """Estimate RTC guidance delay from recent queue consumption."""
+
+    def __init__(self, window_size: int = _RECENT_REAL_DELAY_WINDOW) -> None:
+        self._bootstrap_delay = 0
+        self._real_delays: deque[int] = deque(maxlen=window_size)
+
+    def current(self) -> int:
+        return max(self._real_delays, default=self._bootstrap_delay)
+
+    def observe_bootstrap(self, latency: float, fps: float) -> None:
+        self._bootstrap_delay = math.ceil(latency * fps)
+
+    def observe_real_delay(self, real_delay: int) -> None:
+        self._real_delays.append(real_delay)
 
 
 def _clone_batch(batch: dict[str, Any]) -> dict[str, Any]:
@@ -74,7 +92,7 @@ class VLAOnlyRTCRuntime:
         self.rtc_config = rtc_config
         self.refill_threshold = max(1, chunk_size - execution_horizon)
         self.action_queue = ActionQueue(rtc_config)
-        self.latency_tracker = LatencyTracker()
+        self.guidance_delay_tracker = _GuidanceDelayTracker()
         self.inference_lock = inference_lock
         self.worker: Thread | None = None
         self.worker_error: Exception | None = None
@@ -119,8 +137,7 @@ class VLAOnlyRTCRuntime:
         with self.state_lock:
             previous_actions = self.action_queue.get_left_over()
             action_index = self.action_queue.get_action_index()
-        max_latency = self.latency_tracker.max() or 0.0
-        inference_delay = math.ceil(max_latency * self.fps)
+            inference_delay = self.guidance_delay_tracker.current()
         return _clone_batch(batch), previous_actions, inference_delay, action_index, time.perf_counter()
 
     def _debug_metrics(self, previous_actions: Tensor | None) -> tuple[str, float | None, float | None]:
@@ -168,12 +185,15 @@ class VLAOnlyRTCRuntime:
             raise ValueError(f"RTC deployment expects batch size 1, got {chunk.shape[0]}")
         actions = chunk.squeeze(0).detach()
         latency = time.perf_counter() - request_start_time
-        self.latency_tracker.add(latency)
 
         with self.state_lock:
             real_delay = max(0, self.action_queue.get_action_index() - action_index_before_inference)
             queue_before_merge = self.action_queue.qsize()
             self.action_queue.merge(actions, actions, real_delay, action_index_before_inference)
+            if previous_actions is None:
+                self.guidance_delay_tracker.observe_bootstrap(latency, self.fps)
+            else:
+                self.guidance_delay_tracker.observe_real_delay(real_delay)
 
         correction_text = "n/a" if correction_norm is None else f"{correction_norm:.6f}"
         weight_text = "n/a" if guidance_weight is None else f"{guidance_weight:.3f}"
