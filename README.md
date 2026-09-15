@@ -466,7 +466,7 @@ PYTHONPATH=src python -m compileall -q src/evo_rlt tests/rlt
 
 <p align="center">
   <img alt="SJTU community visual" src="./website/assets/images/sjtu.png" height="68"/>
-  <img alt="EvoMind" src="./website/assets/images/evomind1.png" height="60"/>
+  <img alt="EvoMind" src="./website/assets/images/helper.jpg" height="60"/>
 </p>
 
 <a id="license"></a>
