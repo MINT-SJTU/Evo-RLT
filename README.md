@@ -454,7 +454,7 @@ PYTHONPATH=src python -m compileall -q src/evo_rlt tests/rlt
 ## 💬 Community Channels
 
 - Email: business@evomind-tech.com
-- WeChat group QR code:
+- WeChat group QR code 加群（注明加真机强化学习群）:
 
 <p align="center">
   <img alt="EvoMind WeChat QR" src="./website/assets/images/helper.jpg" width="220"/>
