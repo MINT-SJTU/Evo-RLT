@@ -157,3 +157,26 @@ def test_reset_rtc_runtime_invalidates_inflight_request_without_joining() -> Non
     assert policy._rtc_action_queue.qsize() == 0
     assert len(policy._rtc_step_metadata) == 0
     assert policy.predict_calls == []
+
+
+def test_replay_encoding_serializes_vla_access_without_touching_rtc_queues():
+    policy = _make_policy()
+    policy.config = SimpleNamespace(chunk_length=3, action_dim=2, proprio_dim=2)
+    policy.modifier.encode_replay_state = lambda proprio, prefix: torch.cat([prefix[:, 0], proprio], dim=-1)
+    original_metadata = RLTStepMetadata(phase=1., source_type=1.)
+    policy.modifier._step_metadata.append(original_metadata)
+    policy._rtc_action_queue.merge(torch.ones(4, 2), torch.ones(4, 2), real_delay=0)
+
+    class Pi05:
+        def predict_action_chunk(self, batch):
+            assert policy._rtc_inference_lock.locked()
+            return torch.full((1, 4, 2), 7.)
+
+    policy._rl_token_policy = SimpleNamespace(_pi05=Pi05())
+    policy._prefix_capture = SimpleNamespace(consume=lambda: torch.full((1, 1, 3), 5.))
+    object.__setattr__(policy, 'eval', lambda: policy)
+    state, ref = policy.encode_replay_observation({'observation.state': torch.tensor([[1., 2.]])})
+    assert torch.equal(state, torch.tensor([[5., 5., 5., 1., 2.]]))
+    assert torch.equal(ref, torch.full((1, 3, 2), 7.))
+    assert list(policy.modifier._step_metadata) == [original_metadata]
+    assert policy._rtc_action_queue.qsize() == 4

@@ -253,6 +253,9 @@ def record_loop(
                 "For multi-teleop, the list must contain exactly one KeyboardTeleop and one arm teleoperator. Currently only supported for LeKiwi robot."
             )
 
+    if rlt_online_collector is not None and dataset is None:
+        raise ValueError("Online replay requires a recording dataset")
+
     if dataset is None and policy is not None:
         raise ValueError("Policy-driven recording requires a dataset for feature mapping.")
 
@@ -806,14 +809,14 @@ def record_loop(
 
                 _write_recovery_row(frame)
 
-        if rlt_online_collector is not None:
-            action_tensor = build_action_tensor(action_values)
+        if rlt_online_collector is not None and not skip_frame:
             rlt_online_collector.on_frame(
-                action=action_tensor,
-                state_vec=None,
-                ref_chunk=None,
+                observation_frame=observation_frame,
+                action=build_action_tensor(_sent_action),
                 source_type=rlt_source,
                 is_critical=rlt_is_critical,
+                task=single_task,
+                robot_type=robot.robot_type,
             )
 
         if display_data:

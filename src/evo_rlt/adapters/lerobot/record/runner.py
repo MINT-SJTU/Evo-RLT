@@ -447,6 +447,7 @@ def _episode_outcome_argv(enabled: bool, default_episode_success: str | None = N
 def _collect_rlt_phase_argv(args: argparse.Namespace) -> list[str]:
     common = [
         "--rlt.enable=true",
+        f"--rlt.online_replay={str(args.online_replay).lower()}",
         f"--rlt.rl_phase_key={_keyboard_key_arg(args.rlt_toggle_key)}",
         f"--rlt.rl_phase_double_tap_window_s={args.double_tap_window_s}",
     ]
@@ -659,6 +660,7 @@ def build_segment_record_argv(args, setup, paths, cal_dir: str, teleop_argv: lis
         ),
         *build_reset_time_argv(args),
         "--rlt.enable=true",
+        f"--rlt.online_replay={str(args.online_replay).lower()}",
         "--rlt.skip_prefix_recording=true",
         "--rlt.rl_phase_key_toggles_episode=true",
         f"--rlt.start_in_teleop={'true' if args.initial_source == 'teleop' else 'false'}",

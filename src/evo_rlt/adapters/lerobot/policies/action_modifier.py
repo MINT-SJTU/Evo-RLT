@@ -152,6 +152,10 @@ class RLTActionModifier(nn.Module):
     # Core logic
     # ------------------------------------------------------------------
 
+    def encode_replay_state(self, proprio: Tensor, prefix_tokens: Tensor) -> Tensor:
+        """Encode a current observation in the same space used by the actor."""
+        return torch.cat([self.rl_token.encode(prefix_tokens), proprio], dim=-1)
+
     @torch.no_grad()
     def compute_chunk(
         self,
@@ -181,8 +185,7 @@ class RLTActionModifier(nn.Module):
 
         # RL phase: take first chunk_length frames as actor reference
         ref_chunk = vla_chunk[:, :self.chunk_length, :]
-        z_rl = self.rl_token.encode(prefix_tokens)
-        state_vec = torch.cat([z_rl, proprio], dim=-1)
+        state_vec = self.encode_replay_state(proprio, prefix_tokens)
         ref_flat = flatten_chunk(ref_chunk)
         if not self.vla_ref:
             # Hide the VLA reference from the actor: training ref-dropout

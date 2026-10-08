@@ -550,6 +550,20 @@ class ChunkACPolicy(PreTrainedPolicy):
         return mod.compute_chunk(vla_chunk, proprio, prefix_tokens)
 
     @torch.no_grad()
+    def encode_replay_observation(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+        """Encode an actual chunk boundary without altering execution queues."""
+        self.eval()
+        with self._rtc_inference_lock:
+            mod = self._ensure_modifier()
+            pi05 = self._rl_token_policy._pi05
+            vla_chunk = pi05.predict_action_chunk(batch)
+            prefix = self._prefix_capture.consume()
+            proprio = batch["observation.state"][:, : self.config.proprio_dim]
+            state = mod.encode_replay_state(proprio, prefix)
+            ref = vla_chunk[:, : self.config.chunk_length, :self.config.action_dim]
+        return state, ref
+
+    @torch.no_grad()
     def select_action(self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]) -> Tensor:
         if self._rtc_runtime_enabled:
             return self._select_action_rtc(batch)

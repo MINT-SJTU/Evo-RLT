@@ -199,6 +199,8 @@ class DatasetRecordConfig:
 @dataclass
 class RLTRecordConfig:
     enable: bool = False
+    # Store confirmed real-robot episodes as normalized chunk transitions.
+    online_replay: bool = False
     critical_phase_toggle_key: str = "p"
     default_reset_mode: str = "full"
     # RLT deploy settings (used when enable=True)
@@ -546,6 +548,13 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         raise ValueError(
             "`require_episode_success_label=true` requires `enable_episode_outcome_labeling=true`."
         )
+    if cfg.rlt.online_replay:
+        if not cfg.rlt.enable or cfg.policy is None:
+            raise ValueError("Online replay requires an RLT policy")
+        if not cfg.enable_episode_outcome_labeling:
+            raise ValueError("Online replay requires episode success/failure labeling")
+        if cfg.acp_inference.enable:
+            raise ValueError("Online replay does not support ACP inference")
     logging.info(pformat(asdict(cfg)))
     if cfg.display_data:
         init_rerun(session_name="recording", ip=cfg.display_ip, port=cfg.display_port)
@@ -649,6 +658,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
         collector_policy_id_policy = cfg.collector_policy_id_policy
         collector_policy_id_human = cfg.collector_policy_id_human
 
+        online_replay = None
+        if cfg.rlt.online_replay:
+            if not hasattr(policy, "encode_replay_observation"):
+                raise ValueError("Online replay requires an RLT policy with replay observation encoding")
+            from evo_rlt.adapters.lerobot.record.online_replay import RecordingOnlineReplay
+
+            online_replay = RecordingOnlineReplay(policy, preprocessor, dataset.root / "online_replay")
+
         robot.connect()
         if teleop is not None:
             teleop.connect()
@@ -741,6 +758,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             log_say("Ready", cfg.play_sounds)
 
         def _start_episode_trackers() -> None:
+            if online_replay is not None:
+                online_replay.start_episode(dataset.num_episodes)
             if critical_phase_tracker is not None:
                 critical_phase_tracker.on_episode_start(dataset.num_episodes)
             if intervention_tracker is not None:
@@ -774,6 +793,7 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 acp_inference=cfg.acp_inference,
                 communication_retry_timeout_s=cfg.communication_retry_timeout_s,
                 communication_retry_interval_s=cfg.communication_retry_interval_s,
+                rlt_online_collector=online_replay,
                 critical_phase_tracker=critical_phase_tracker,
                 rlt_intervention_tracker=intervention_tracker,
                 skip_prefix_recording=cfg.rlt.skip_prefix_recording or teleop_r_key_mode,
@@ -797,12 +817,14 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
                 intervention_tracker.on_episode_end(ep_frames)
 
         def _resolve_current_episode_success() -> str | None:
+            if events["rerecord_episode"]:
+                return None
             if not cfg.enable_episode_outcome_labeling:
                 return None
             episode_success = resolve_episode_success_label(
                 explicit_label=events.get("episode_outcome"),
                 default_label=cfg.default_episode_success,
-                require_label=cfg.require_episode_success_label,
+                require_label=cfg.require_episode_success_label or cfg.rlt.online_replay,
             )
             if events.get("episode_outcome") is None and episode_success is not None:
                 logging.warning(
@@ -864,6 +886,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             events["exit_early"] = False
             events["episode_outcome"] = None
             dataset.clear_episode_buffer()
+            if online_replay is not None:
+                online_replay.discard_episode()
             return True
 
         def _extra_episode_metadata(episode_success: str | None) -> dict | None:
@@ -888,6 +912,8 @@ def record(cfg: RecordConfig) -> LeRobotDataset:
             if _discard_rerecord_episode():
                 return recorded_episodes
             dataset.save_episode(extra_episode_metadata=_extra_episode_metadata(episode_success))
+            if online_replay is not None:
+                online_replay.finish_episode(episode_success)
             return recorded_episodes + 1
 
         with VideoEncodingManager(dataset):

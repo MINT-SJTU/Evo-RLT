@@ -53,6 +53,9 @@ def add_rtc_args(
 
 
 def add_default_collect_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--online-replay", action="store_true", help="Save confirmed RLT episodes as training transitions."
+    )
     parser.add_argument("--policy-path", required=True)
     parser.add_argument("--vla-path", default=None)
     parser.add_argument("--rl-token-path", default=None)
@@ -112,6 +115,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Record only the key segment. Success/failure labels apply to the segment.",
     )
     add_common_record_args(segment)
+    segment.add_argument(
+        "--online-replay", action="store_true", help="Save confirmed RLT episodes as training transitions."
+    )
     add_rtc_args(segment)
     segment.add_argument("--critical-source", choices=["rlt", "vla"], required=True)
     segment.add_argument("--double-tap-window-s", type=float, default=0.6)

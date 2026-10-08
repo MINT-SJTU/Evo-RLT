@@ -1,44 +1,65 @@
 from __future__ import annotations
 
-import logging
-
 import torch
 
-from evo_rlt.core.interfaces import ChunkTransition
+from evo_rlt.adapters.lerobot.record.annotations import (
+    SOURCE_HUMAN,
+    SOURCE_RL,
+    SOURCE_VLA,
+)
+from evo_rlt.core.interfaces import (
+    TRANSITION_SOURCE_HUMAN_OVERRIDE,
+    TRANSITION_SOURCE_RL_AUTONOMOUS,
+    TRANSITION_SOURCE_WARMUP_VLA,
+    ChunkTransition,
+)
 from evo_rlt.core.replay_buffer import ReplayBuffer
-from evo_rlt.adapters.lerobot.record.annotations import SOURCE_HUMAN
-
-logger = logging.getLogger(__name__)
+from evo_rlt.core.rewards import build_reward_seq
 
 
 class RLTOnlineCollector:
-    """Accumulates per-frame robot data and emits ChunkTransitions every C frames."""
+    """Stage normalized robot chunks until the episode outcome is confirmed.
 
-    def __init__(
-        self,
-        replay_buffer: ReplayBuffer,
-        chunk_length: int,
-        action_dim: int,
-    ):
+    The caller supplies a freshly encoded observation/reference at each chunk
+    boundary. Only finalized episodes enter replay, so unresolved next states,
+    missing terminal rewards and discarded rerecords cannot be sampled.
+    """
+
+    def __init__(self, replay_buffer: ReplayBuffer, chunk_length: int, action_dim: int):
+        if chunk_length <= 0 or action_dim <= 0:
+            raise ValueError("chunk_length and action_dim must be positive")
         self._buffer = replay_buffer
         self._C = chunk_length
         self._action_dim = action_dim
+        self._active = False
+        self._episode_id = -1
         self._frame_actions: list[torch.Tensor] = []
         self._frame_sources: list[float] = []
+        self._transitions: list[ChunkTransition] = []
         self._chunk_state: torch.Tensor | None = None
         self._chunk_ref: torch.Tensor | None = None
-        self._chunk_is_critical: float = 0.0
-        self._episode_id: int = -1
-        self._prev_transition: ChunkTransition | None = None
+        self._chunk_is_critical = 0.0
+
+    @property
+    def needs_state(self) -> bool:
+        return not self._frame_actions
 
     def start_episode(self, episode_id: int) -> None:
+        if self._active:
+            raise RuntimeError(
+                "Finalize or discard the current episode before starting another"
+            )
         self._episode_id = episode_id
+        self._active = True
+
+    def discard_episode(self) -> None:
         self._frame_actions.clear()
         self._frame_sources.clear()
+        self._transitions.clear()
         self._chunk_state = None
         self._chunk_ref = None
         self._chunk_is_critical = 0.0
-        self._prev_transition = None
+        self._active = False
 
     def on_frame(
         self,
@@ -48,84 +69,86 @@ class RLTOnlineCollector:
         source_type: float,
         is_critical: float,
     ) -> ChunkTransition | None:
-        if len(self._frame_actions) == 0:
-            # Capture state at chunk start. During intervention state_vec may be None;
-            # fall back to the previous transition's state so human chunks are not dropped.
-            if state_vec is not None:
-                self._chunk_state = state_vec
-                self._chunk_ref = ref_chunk
-            elif self._prev_transition is not None:
-                self._chunk_state = self._prev_transition.next_state_vec
-                self._chunk_ref = self._prev_transition.next_ref_chunk
-            self._chunk_is_critical = is_critical
-
-        self._frame_actions.append(action.detach().cpu())
+        if not self._active:
+            raise RuntimeError("start_episode must be called before on_frame")
+        if action.shape != (self._action_dim,):
+            raise ValueError(
+                f"Expected action shape {(self._action_dim,)}, got {tuple(action.shape)}"
+            )
+        if source_type not in (SOURCE_VLA, SOURCE_RL, SOURCE_HUMAN):
+            raise ValueError(f"Unknown recording source: {source_type}")
+        if self.needs_state:
+            if state_vec is None or ref_chunk is None:
+                raise ValueError(
+                    "Every chunk requires a current state_vec and ref_chunk"
+                )
+            if state_vec.ndim != 1 or ref_chunk.shape != (self._C, self._action_dim):
+                raise ValueError(
+                    "Expected an unbatched state and a (chunk_length, action_dim) reference"
+                )
+            self._chunk_state = state_vec.detach().cpu().clone()
+            self._chunk_ref = ref_chunk.detach().cpu().clone()
+            if self._transitions:
+                self._transitions[-1].next_state_vec = self._chunk_state
+                self._transitions[-1].next_ref_chunk = self._chunk_ref
+        self._chunk_is_critical = max(self._chunk_is_critical, float(is_critical))
+        self._frame_actions.append(action.detach().cpu().clone())
         self._frame_sources.append(source_type)
-
-        if len(self._frame_actions) >= self._C:
-            return self._emit_transition(done=False)
+        if len(self._frame_actions) == self._C:
+            return self._emit_transition()
         return None
 
     def flush_episode(self, episode_success: bool) -> ChunkTransition | None:
-        # TODO(online-rl): episode_success is accepted but discarded. Before enabling the
-        # online collector, thread it into _emit_transition so the terminal chunk's
-        # reward_seq carries success_bonus. See docs/rlt/rlt_pipeline_review_20260415_1839.md S2-1.
+        if not self._active:
+            raise RuntimeError("No active episode to finalize")
+        if not isinstance(episode_success, bool):
+            raise TypeError("episode_success must be a bool")
         if self._frame_actions:
-            return self._emit_transition(done=True)
-        # Episode length was exact multiple of C — mark last emitted chunk as terminal
-        if self._prev_transition is not None:
-            self._prev_transition.done = torch.tensor(1.0)
-        return None
+            self._emit_transition()
+        terminal = self._transitions[-1] if self._transitions else None
+        if terminal is not None:
+            terminal.done = torch.tensor(1.0)
+            terminal.reward_seq = build_reward_seq(
+                self._C,
+                is_terminal_chunk=True,
+                episode_success=episode_success,
+                actual_steps=terminal.actual_steps,
+            )
+            for transition in self._transitions:
+                self._buffer.add(transition)
+        self.discard_episode()
+        return terminal
 
-    def _emit_transition(self, done: bool) -> ChunkTransition | None:
-        if self._chunk_state is None or self._chunk_ref is None:
-            self._frame_actions.clear()
-            self._frame_sources.clear()
-            self._chunk_is_critical = 0.0
-            return None
-
+    def _emit_transition(self) -> ChunkTransition:
         actual = len(self._frame_actions)
-        exec_list = self._frame_actions[: self._C]
-        exec_chunk = torch.stack(exec_list)
-        if actual < self._C:
-            pad = torch.zeros(self._C - actual, self._action_dim, dtype=exec_chunk.dtype)
-            exec_chunk = torch.cat([exec_chunk, pad])
-
-        # Deterministic tie-break: human wins ties (highest priority)
-        dominant_source = max(set(self._frame_sources), key=lambda s: (self._frame_sources.count(s), s))
-        ref = self._chunk_ref.cpu()
-        if dominant_source == SOURCE_HUMAN:
-            ref = exec_chunk.clone()
-
-        state = self._chunk_state.cpu()
-        # TODO(online-rl): inject terminal success reward here before real-robot online RL
-        # is enabled. Currently this collector is unwired — flush_episode is never called
-        # from the recording loop. See docs/rlt/rlt_pipeline_review_20260415_1839.md S2-1.
+        exec_chunk = torch.zeros(
+            self._C, self._action_dim, dtype=self._frame_actions[0].dtype
+        )
+        exec_chunk[:actual] = torch.stack(self._frame_actions)
+        # Any human override identifies the chunk as intervention data, even
+        # when the human supplies fewer than half of its executed actions.
+        if SOURCE_HUMAN in self._frame_sources:
+            source = TRANSITION_SOURCE_HUMAN_OVERRIDE
+        elif SOURCE_RL in self._frame_sources:
+            source = TRANSITION_SOURCE_RL_AUTONOMOUS
+        else:
+            source = TRANSITION_SOURCE_WARMUP_VLA
         transition = ChunkTransition(
-            state_vec=state,
+            state_vec=self._chunk_state,
             exec_chunk=exec_chunk,
-            ref_chunk=ref,
-            reward_seq=torch.zeros(self._C),
-            next_state_vec=state,
-            next_ref_chunk=ref,
-            done=torch.tensor(float(done)),
-            intervention=torch.tensor(float(dominant_source == SOURCE_HUMAN)),
+            ref_chunk=self._chunk_ref,
+            reward_seq=build_reward_seq(self._C, False, False, actual_steps=actual),
+            next_state_vec=self._chunk_state,
+            next_ref_chunk=self._chunk_ref,
+            done=torch.tensor(0.0),
+            intervention=torch.tensor(float(SOURCE_HUMAN in self._frame_sources)),
             actual_steps=torch.tensor(actual),
-            source=torch.tensor(int(dominant_source)),
+            source=torch.tensor(source),
             episode_id=torch.tensor(self._episode_id),
             is_critical=torch.tensor(self._chunk_is_critical),
         )
-
-        if self._prev_transition is not None:
-            self._prev_transition.next_state_vec = state.clone()
-            self._prev_transition.next_ref_chunk = ref.clone()
-
-        self._buffer.add(transition)
-        self._prev_transition = transition
-
+        self._transitions.append(transition)
         self._frame_actions.clear()
         self._frame_sources.clear()
-        self._chunk_state = None
-        self._chunk_ref = None
         self._chunk_is_critical = 0.0
         return transition

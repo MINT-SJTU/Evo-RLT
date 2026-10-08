@@ -311,6 +311,22 @@ export HF_HUB_OFFLINE=1
 
 Default VLA-RLT-VLA real-robot collection uses the official LeRobot `0.5.1` streaming encoder. The wrapper keeps the foreground recording loop responsive and expands the dataset settings to `--dataset.vcodec=h264`, `--dataset.video_encoding_batch_size=<num_episodes + 1>`, and `--dataset.streaming_encoding=true`.
 
+Add `--online-replay` to `evo-rlt-collect-default` or `evo-rlt-record segment`
+to collect normalized chunk transitions during robot recording. Successful
+episodes receive reward `1` at the terminal chunk's last valid step; failed
+episodes receive only zeros. Episodes enter replay only after their outcome is
+confirmed and the recording is saved; rerecorded episodes are discarded.
+The cache is saved atomically to `<DATASET_ROOT>/online_replay/chunk_transitions_train.pt`
+and can be passed directly to actor-critic training via `--dataset.repo_id`.
+Resuming recording reloads the existing replay cache (up to 200,000 chunks).
+
+Online replay uses the deployed SFT preprocessor for executed actions, including
+human intervention, and encodes the current observation/reference every chunk
+boundary. This adds a VLA forward pass per chunk and can lower control frequency.
+With RTC, replay encoding shares the inference lock but leaves action and metadata
+queues intact. This collects training data; optimizer updates still run through
+the actor-critic trainer. ACP inference is unsupported with online replay.
+
 Shared collection arguments:
 
 ```bash

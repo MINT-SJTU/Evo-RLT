@@ -206,3 +206,17 @@ class TestValidateFeatures:
         cfg.validate_features()
         assert "observation.state" in cfg.input_features
         assert "action" in cfg.output_features
+
+
+def test_replay_observation_encoding_preserves_action_and_metadata_queues():
+    policy = _make_policy_with_dummy_vla()
+    batch = _make_batch()
+    policy.set_rl_mode()
+    policy.select_action(batch)
+    actions = list(policy.modifier._action_queue)
+    metadata = list(policy.modifier._step_metadata)
+    state, ref = policy.encode_replay_observation(batch)
+    assert state.shape == (1, policy.config.rl_token_dim + policy.config.proprio_dim)
+    assert ref.shape == (1, policy.config.chunk_length, policy.config.action_dim)
+    assert all(a is b for a, b in zip(actions, policy.modifier._action_queue, strict=True))
+    assert all(a is b for a, b in zip(metadata, policy.modifier._step_metadata, strict=True))

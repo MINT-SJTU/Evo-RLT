@@ -45,6 +45,7 @@ def test_segment_defaults_to_rtc_enabled():
 
 def test_segment_rlt_argv_marks_key_segment_with_teleop_start_and_rtc():
     args = SimpleNamespace(
+        online_replay=False,
         critical_source="rlt",
         initial_source="teleop",
         policy_path="/tmp/ac",
@@ -232,6 +233,7 @@ def test_default_collect_full_mode_uses_r_key_as_episode_outcome():
 
 def test_default_collect_argv_matches_best_real_robot_rtc_chunks():
     args = SimpleNamespace(
+        online_replay=False,
         policy_path="/tmp/ac",
         vla_path="/tmp/vla.pt",
         rl_token_path="/tmp/rlt",
@@ -299,6 +301,7 @@ def test_default_collect_argv_matches_best_real_robot_rtc_chunks():
 
 def test_default_collect_only_critical_starts_recording_on_first_r_and_ends_on_second_r():
     args = SimpleNamespace(
+        online_replay=False,
         policy_path="/tmp/ac",
         vla_path="/tmp/vla.pt",
         rl_token_path="/tmp/rlt",
@@ -347,6 +350,7 @@ def test_default_collect_only_critical_starts_recording_on_first_r_and_ends_on_s
 
 def test_default_collect_start_with_teleop_sets_episode_initial_source():
     args = SimpleNamespace(
+        online_replay=False,
         policy_path="/tmp/ac",
         vla_path="/tmp/vla.pt",
         rl_token_path="/tmp/rlt",
@@ -551,6 +555,7 @@ def test_official_bi_so_leader_feedback_splits_prefixed_actions():
 
 def test_default_collect_argv_accepts_headless_default_episode_success():
     args = SimpleNamespace(
+        online_replay=False,
         policy_path="/tmp/ac",
         vla_path="/tmp/vla.pt",
         rl_token_path="/tmp/rlt",
@@ -581,3 +586,35 @@ def test_default_collect_argv_accepts_headless_default_episode_success():
 
     assert "--default_episode_success=success" in argv
     assert "--require_episode_success_label=true" in argv
+
+
+def test_online_replay_cli_flag_is_forwarded_to_recording_backend():
+    from evo_rlt.adapters.lerobot.record.runner import _collect_rlt_phase_argv
+
+    parser = build_parser()
+    args = parser.parse_args(['collect', '--policy-path', '/tmp/ac', '--online-replay'])
+    assert '--rlt.online_replay=true' in _collect_rlt_phase_argv(args)
+    args = parser.parse_args(['collect', '--policy-path', '/tmp/ac'])
+    assert '--rlt.online_replay=false' in _collect_rlt_phase_argv(args)
+
+
+@pytest.mark.parametrize('labels, acp', [(False, False), (True, True)])
+def test_online_replay_rejects_invalid_configuration_before_connecting_robot(monkeypatch, labels, acp):
+    from evo_rlt.adapters.lerobot.record import backend
+    from evo_rlt.adapters.lerobot.policies.configuration_rlt import RLTPretrainedConfig
+    from lerobot.robots.config import RobotConfig
+
+    monkeypatch.setattr(sys, "argv", ["record"])
+    cfg = backend.RecordConfig(
+        robot=RobotConfig(),
+        dataset=backend.DatasetRecordConfig(repo_id='local/test', single_task='insert'),
+        policy=RLTPretrainedConfig(device='cpu'),
+        enable_episode_outcome_labeling=labels,
+        rlt=backend.RLTRecordConfig(enable=True, online_replay=True),
+    )
+    cfg.acp_inference.enable = acp
+    calls = []
+    monkeypatch.setattr(backend, 'make_robot_from_config', lambda config: calls.append(config))
+    with pytest.raises(ValueError, match='Online replay'):
+        backend.record(cfg)
+    assert calls == []

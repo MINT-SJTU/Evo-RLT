@@ -371,6 +371,23 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
         return self.modifier.compute_chunk(vla_chunk, proprio, prefix_tokens)
 
     @torch.no_grad()
+    def encode_replay_observation(self, batch: dict[str, Tensor]) -> tuple[Tensor, Tensor]:
+        """Encode an actual chunk boundary without altering execution queues."""
+        self.eval()
+        injected_vla = self.__dict__["_injected_vla"]
+        if injected_vla is not None:
+            obs = self._make_observation(batch)
+            output = injected_vla.forward_vla(obs)
+            state = self.modifier.encode_replay_state(obs.proprio, output.final_tokens)
+            vla_chunk = output.sampled_action_chunk
+        else:
+            vla_chunk = self._ensure_pi05().predict_action_chunk(batch)
+            prefix = self.prefix_capture.consume()
+            proprio = batch["observation.state"][:, : self.config.proprio_dim]
+            state = self.modifier.encode_replay_state(proprio, prefix)
+        return state, vla_chunk[:, : self.config.chunk_length, :self.config.action_dim]
+
+    @torch.no_grad()
     def select_action(
         self, batch: dict[str, Tensor], **kwargs: Unpack[ActionSelectKwargs]
     ) -> Tensor:
