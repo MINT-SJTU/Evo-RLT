@@ -141,6 +141,7 @@ def main() -> None:
             "image_only": args.image_only,
             "active_cameras": active_cameras,
             "num_rl_tokens": config.rl_token.num_rl_tokens,
+            "normalize_encoder_output": config.rl_token.normalize_encoder_output,
             "norm_gamma": args.norm_gamma,
             "norm_stats": args.norm_stats,
         },

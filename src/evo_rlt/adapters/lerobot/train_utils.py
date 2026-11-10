@@ -34,6 +34,7 @@ def save_rl_token_state(
         "ff_dim": rl_token_cfg.ff_dim if rl_token_cfg.ff_dim is None else int(rl_token_cfg.ff_dim),
         "num_rl_tokens": int(getattr(rl_token, "num_rl_tokens")),
         "inference_only": bool(getattr(rl_token, "inference_only", False)),
+        "normalize_encoder_output": bool(getattr(rl_token, "normalize_encoder_output", False)),
     }
 
     train_config = dataclasses.asdict(rl_token_cfg) if dataclasses.is_dataclass(rl_token_cfg) else dict(rl_token_cfg)
