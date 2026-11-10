@@ -47,6 +47,7 @@ class RLTPretrainedConfig(PreTrainedConfig):
     rl_token_dec_layers: int = 3
     rl_token_ff_dim: int = 4096
     rl_token_num_rl_tokens: int = 4
+    rl_token_normalize_encoder_output: bool = False
 
     # --- Actor architecture ---
     actor_hidden_dim: int = 256

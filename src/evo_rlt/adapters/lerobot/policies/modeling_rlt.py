@@ -105,6 +105,7 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
             ff_dim=config.rl_token_ff_dim,
             num_rl_tokens=config.rl_token_num_rl_tokens,
             inference_only=True,
+            normalize_encoder_output=config.rl_token_normalize_encoder_output,
         )
 
         # Build Actor (ResidualMLP by default)
@@ -192,6 +193,7 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
         cfg = self.config
 
         meta = ckpt.get("metadata") or {}
+        cfg.rl_token_normalize_encoder_output = "encoder_out_norm.weight" in sd
         if meta.get("num_rl_tokens") is not None:
             cfg.rl_token_num_rl_tokens = int(meta["num_rl_tokens"])
         elif "rl_token_embed" in sd:

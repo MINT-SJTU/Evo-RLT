@@ -98,18 +98,21 @@ class RLTAlgorithm:
             ff_dim=cfg.ff_dim,
             num_rl_tokens=cfg.num_rl_tokens,
             inference_only=False,
+            normalize_encoder_output=cfg.normalize_encoder_output,
         ).to(device)
         self.sync_full_from_encoder(rl_token_full)
         return rl_token_full
 
     def sync_full_from_encoder(self, rl_token_full: RLTokenModule) -> None:
-        """Copy encoder weights + rl_token_embed from policy.rl_token into a full module."""
+        """Copy encoder, output normalization and token embedding into a full module."""
         rl_token_full.encoder.load_state_dict(self.policy.rl_token.encoder.state_dict())
+        rl_token_full.encoder_out_norm.load_state_dict(self.policy.rl_token.encoder_out_norm.state_dict())
         rl_token_full.rl_token_embed.data.copy_(self.policy.rl_token.rl_token_embed.data)
 
     def sync_encoder_from_full(self, rl_token_full: RLTokenModule) -> None:
-        """Copy encoder weights + rl_token_embed back from full module to policy.rl_token."""
+        """Copy encoder, output normalization and token embedding back to the policy."""
         self.policy.rl_token.encoder.load_state_dict(rl_token_full.encoder.state_dict())
+        self.policy.rl_token.encoder_out_norm.load_state_dict(rl_token_full.encoder_out_norm.state_dict())
         self.policy.rl_token.rl_token_embed.data.copy_(rl_token_full.rl_token_embed.data)
 
     # ------------------------------------------------------------------

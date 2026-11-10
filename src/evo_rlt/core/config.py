@@ -14,6 +14,7 @@ class RLTokenConfig:
     dec_layers: int = 4
     ff_dim: int | None = None  # defaults to 4 * token_dim if None
     num_rl_tokens: int = 1  # number of RL tokens (>1 reduces compression ratio)
+    normalize_encoder_output: bool = False  # opt-in LayerNorm at the RL-token bottleneck
 
     def __post_init__(self):
         if self.ff_dim is None:
