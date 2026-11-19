@@ -35,6 +35,7 @@ class RLTokenPolicyConfig(PreTrainedConfig):
     rl_token_ff_dim: int = 4096
     rl_token_num_rl_tokens: int = 1
     rl_token_init_scale: float = 0.02
+    rl_token_normalize_encoder_output: bool = False
 
     # --- Prefix token postprocessing (before RL token encoder) ---
     token_pool_size: int = 0

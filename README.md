@@ -244,6 +244,24 @@ python -c 'from evo_rlt.adapters.lerobot import register; register(); from lerob
   --job_name=rl_token
 ```
 
+If RL-token reconstruction becomes unstable, optionally normalize the encoder's
+RL-token outputs with LayerNorm by adding
+`--policy.rl_token_normalize_encoder_output=true` to the training command above.
+This normalizes the bottleneck before it enters the decoder and before pooling
+for downstream encoding; it does not change the reconstruction targets or MSE.
+Pre-norm Transformer layers (`norm_first=True`) do not normalize their final
+residual output, so they do not replace this output normalization.
+
+For the core YAML training API, set `rl_token.normalize_encoder_output: true`.
+The option defaults to `false` to preserve existing behavior and legacy checkpoint
+compatibility. Use the same setting for training and downstream inference.
+Normalized checkpoints include `encoder_out_norm.weight` and
+`encoder_out_norm.bias`; loading a checkpoint with a mismatched setting raises an
+error even with `strict=False`. LeRobot policy configs and joint-checkpoint
+metadata save the setting; the `.pt` deployment loader infers it from the weights.
+Do not enable it only at inference on an existing unnormalized checkpoint; train
+a new normalized RL-token module instead.
+
 <a id="build-transition-cache"></a>
 
 ### 5) Build Transition Cache

@@ -24,6 +24,7 @@ class RLTokenModule(nn.Module):
         ff_dim: int | None = None,
         num_rl_tokens: int = 1,
         inference_only: bool = False,
+        normalize_encoder_output: bool = False,
     ):
         super().__init__()
         if ff_dim is None:
@@ -32,6 +33,7 @@ class RLTokenModule(nn.Module):
         self.token_dim = token_dim
         self.num_rl_tokens = num_rl_tokens
         self.inference_only = inference_only
+        self.normalize_encoder_output = normalize_encoder_output
         self.rl_token_embed = nn.Parameter(torch.randn(1, num_rl_tokens, token_dim) * 0.02)
 
         enc_layer = nn.TransformerEncoderLayer(
@@ -42,6 +44,10 @@ class RLTokenModule(nn.Module):
             norm_first=True,
         )
         self.encoder = nn.TransformerEncoder(enc_layer, num_layers=num_enc_layers)
+        # Pre-norm layers do not normalize the final residual output. Normalize
+        # each RL token before decoding or pooling for the downstream policy.
+        # Identity preserves the original behavior and checkpoint keys by default.
+        self.encoder_out_norm = nn.LayerNorm(token_dim) if normalize_encoder_output else nn.Identity()
 
         if not inference_only:
             dec_layer = nn.TransformerDecoderLayer(
@@ -76,7 +82,26 @@ class RLTokenModule(nn.Module):
         rl = self.rl_token_embed.expand(B, -1, -1)  # (B, N, D)
         x = torch.cat([vla_tokens, rl], dim=1)  # (B, M+N, D)
         out = self.encoder(x)
-        return out[:, -self.num_rl_tokens:, :]  # (B, N, D)
+        return self.encoder_out_norm(out[:, -self.num_rl_tokens:, :])  # (B, N, D)
+
+    def _load_from_state_dict(
+        self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs,
+    ):
+        # Several callers use strict=False to omit the decoder. Do not let that
+        # silently discard a trained normalization or add one to a legacy model.
+        if prefix + "rl_token_embed" in state_dict:
+            norm_keys = [prefix + "encoder_out_norm." + name for name in ("weight", "bias")]
+            has_norm = any(key in state_dict for key in norm_keys)
+            if has_norm != self.normalize_encoder_output:
+                error_msgs.append(
+                    f"{prefix}normalize_encoder_output={self.normalize_encoder_output} does not match "
+                    f"the checkpoint; construct the module with normalize_encoder_output={has_norm}."
+                )
+            elif has_norm and not all(key in state_dict for key in norm_keys):
+                error_msgs.append(f"{prefix}encoder_out_norm checkpoint must contain both weight and bias.")
+        super()._load_from_state_dict(
+            state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs,
+        )
 
     def decode(self, z_rl: torch.Tensor, teacher_tokens: torch.Tensor) -> torch.Tensor:
         """Autoregressive reconstruction with teacher forcing.

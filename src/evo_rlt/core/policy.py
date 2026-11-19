@@ -36,6 +36,7 @@ class RLTPolicy(nn.Module):
             ff_dim=config.rl_token.ff_dim,
             num_rl_tokens=config.rl_token.num_rl_tokens,
             inference_only=True,
+            normalize_encoder_output=config.rl_token.normalize_encoder_output,
         )
 
         self.actor = ChunkActor(
@@ -133,5 +134,7 @@ class RLTPolicy(nn.Module):
     def freeze_rl_token_encoder(self) -> None:
         """Freeze RL token encoder (after demo adaptation)."""
         for p in self.rl_token.encoder.parameters():
+            p.requires_grad = False
+        for p in self.rl_token.encoder_out_norm.parameters():
             p.requires_grad = False
         self.rl_token.rl_token_embed.requires_grad = False
