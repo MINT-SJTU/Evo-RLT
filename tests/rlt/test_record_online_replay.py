@@ -15,12 +15,17 @@ from lerobot.processor import (
 from evo_rlt.adapters.lerobot.policies.dataset_rlt_ac import ChunkTransitionDataset
 from evo_rlt.adapters.lerobot.record.annotations import SOURCE_HUMAN
 from evo_rlt.adapters.lerobot.record.online_replay import RecordingOnlineReplay
+from evo_rlt.core.rl_token import RLTokenModule
 
 
 class ReplayPolicy:
     config = SimpleNamespace(device="cpu", use_amp=False, chunk_length=3, action_dim=2)
 
-    def __init__(self):
+    def __init__(self, *, normalize_encoder_output=False):
+        self.rl_token = RLTokenModule(
+            token_dim=8, nhead=2, num_enc_layers=1, ff_dim=16, inference_only=True,
+            normalize_encoder_output=normalize_encoder_output,
+        )
         self.encoded_states = []
 
     def encode_replay_observation(self, batch):
@@ -86,7 +91,9 @@ def test_recording_normalizes_actions_encodes_boundaries_and_persists_outcome(tm
     )
     assert torch.equal(dataset[0]["next_state_vec"], dataset[1]["state_vec"])
     assert torch.equal(dataset[1]["reward_seq"], torch.tensor([0.0, 1.0, 0.0]))
-    resumed = RecordingOnlineReplay(policy, make_preprocessor(), tmp_path)
+    reloaded_policy = ReplayPolicy()
+    reloaded_policy.rl_token.load_state_dict(policy.rl_token.state_dict())
+    resumed = RecordingOnlineReplay(reloaded_policy, make_preprocessor(), tmp_path)
     resumed.start_episode(1)
     feed_recording(resumed, 3)
     resumed.finish_episode("failure")
@@ -94,6 +101,36 @@ def test_recording_normalizes_actions_encodes_boundaries_and_persists_outcome(tm
     assert len(dataset) == 3
     assert dataset[2]["reward_seq"].sum().item() == 0
     assert dataset[1]["reward_seq"].sum().item() == 1
+
+
+@pytest.mark.parametrize("change", ["layernorm", "weights", "missing_fingerprint"])
+def test_recording_rejects_unverified_existing_replay(tmp_path, change):
+    policy = ReplayPolicy()
+    replay = RecordingOnlineReplay(policy, make_preprocessor(), tmp_path)
+    replay.start_episode(0)
+    feed_recording(replay, 3)
+    replay.finish_episode("success")
+    cache = tmp_path / "chunk_transitions_train.pt"
+    original_cache = cache.read_bytes()
+
+    if change == "layernorm":
+        resumed_policy = ReplayPolicy(normalize_encoder_output=True)
+        resumed_policy.rl_token.encoder.load_state_dict(policy.rl_token.encoder.state_dict())
+        with torch.no_grad():
+            resumed_policy.rl_token.rl_token_embed.copy_(policy.rl_token.rl_token_embed)
+    else:
+        resumed_policy = ReplayPolicy()
+        resumed_policy.rl_token.load_state_dict(policy.rl_token.state_dict())
+        if change == "weights":
+            with torch.no_grad():
+                resumed_policy.rl_token.rl_token_embed.add_(1)
+        else:
+            (tmp_path / "rl_token_encoder.sha256").unlink()
+
+    message = "no RL-token encoder fingerprint" if change == "missing_fingerprint" else "fingerprint mismatch"
+    with pytest.raises(ValueError, match=message):
+        RecordingOnlineReplay(resumed_policy, make_preprocessor(), tmp_path)
+    assert cache.read_bytes() == original_cache
 
 
 def test_recording_requires_outcome_and_discards_rerecord(tmp_path):
