@@ -87,14 +87,25 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
     config_class = RLTPretrainedConfig
     name = "rlt"
 
-    def __init__(self, config: RLTPretrainedConfig, *args, **kwargs):
+    def __init__(
+        self,
+        config: RLTPretrainedConfig,
+        *args,
+        rl_token_checkpoint: dict | None = None,
+        ac_checkpoint: dict | None = None,
+        **kwargs,
+    ):
         super().__init__(config, *args, **kwargs)
         self.config: RLTPretrainedConfig = config
 
         if config.rl_token_ckpt_path:
-            self._infer_rl_token_arch_from_ckpt(config.rl_token_ckpt_path)
+            rl_token_checkpoint = torch.load(config.rl_token_ckpt_path, map_location="cpu", weights_only=True)
         if config.ac_ckpt_path:
-            self._infer_actor_arch_from_ckpt(config.ac_ckpt_path)
+            ac_checkpoint = torch.load(config.ac_ckpt_path, map_location="cpu", weights_only=True)
+        if rl_token_checkpoint is not None:
+            self._infer_rl_token_arch_from_ckpt(rl_token_checkpoint)
+        if ac_checkpoint is not None:
+            self._infer_actor_arch_from_ckpt(ac_checkpoint)
 
         # Build RL Token encoder (inference-only: no decoder)
         rl_token = RLTokenModule(
@@ -148,8 +159,10 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
         self._pi05 = None
         self.__dict__["_injected_vla"] = None
 
-        # Load RL Token + Actor weights from checkpoint files if paths given
-        self._load_rlt_checkpoints()
+        if rl_token_checkpoint is not None:
+            self._load_rl_token_ckpt(rl_token_checkpoint)
+        if ac_checkpoint is not None:
+            self.actor.load_state_dict(ac_checkpoint.get("actor_state_dict", ac_checkpoint))
 
     # ------------------------------------------------------------------
     # Convenience accessors (sub-modules registered via modifier)
@@ -181,19 +194,20 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
     # Checkpoint loading
     # ------------------------------------------------------------------
 
-    def _infer_rl_token_arch_from_ckpt(self, path: str) -> None:
+    def _infer_rl_token_arch_from_ckpt(self, ckpt: dict) -> None:
         """Override config fields to match the RL Token checkpoint architecture.
 
         Reads ckpt metadata (num_rl_tokens) and state_dict shapes (enc/dec
         layer count, ff_dim) and writes them back onto self.config so the
         encoder is built with shapes that match the saved weights.
         """
-        ckpt = torch.load(path, map_location="cpu", weights_only=True)
         sd = ckpt.get("rl_token_state_dict", ckpt)
         cfg = self.config
 
         meta = ckpt.get("metadata") or {}
         cfg.rl_token_normalize_encoder_output = "encoder_out_norm.weight" in sd
+        if "rl_token_embed" in sd:
+            cfg.rl_token_dim = int(sd["rl_token_embed"].shape[-1])
         if meta.get("num_rl_tokens") is not None:
             cfg.rl_token_num_rl_tokens = int(meta["num_rl_tokens"])
         elif "rl_token_embed" in sd:
@@ -229,14 +243,13 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
             cfg.rl_token_ff_dim,
         )
 
-    def _infer_actor_arch_from_ckpt(self, path: str) -> None:
+    def _infer_actor_arch_from_ckpt(self, ckpt: dict) -> None:
         """Override actor config fields to match the AC checkpoint architecture.
 
         Reads ckpt metadata (hidden_dim, num_layers, residual, activation,
         layer_norm) and writes them back onto self.config so the actor is
         built with shapes that match the saved weights.
         """
-        ckpt = torch.load(path, map_location="cpu", weights_only=True)
         meta = (ckpt.get("metadata") or {}).get("actor") or {}
         cfg = self.config
         if not meta:
@@ -253,30 +266,12 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
             cfg.actor_layer_norm,
         )
 
-    def _load_rlt_checkpoints(self) -> None:
-        """Load RL Token encoder and Actor weights from .pt checkpoint files."""
-        cfg = self.config
-
-        if cfg.rl_token_ckpt_path:
-            self._load_rl_token_ckpt(cfg.rl_token_ckpt_path)
-
-        if cfg.ac_ckpt_path:
-            self._load_ac_ckpt(cfg.ac_ckpt_path)
-
-    def _load_rl_token_ckpt(self, path: str) -> None:
-        log.info("Loading RL Token checkpoint from %s", path)
-        ckpt = torch.load(path, map_location="cpu", weights_only=True)
+    def _load_rl_token_ckpt(self, ckpt: dict) -> None:
         raw_sd = ckpt.get("rl_token_state_dict", ckpt)
         filtered, skipped = filter_encoder_only(raw_sd)
         if skipped:
             log.info("Stripped %d decoder keys from RL Token checkpoint", len(skipped))
-        self.rl_token.load_state_dict(filtered, strict=False)
-
-    def _load_ac_ckpt(self, path: str) -> None:
-        log.info("Loading Actor checkpoint from %s", path)
-        ckpt = torch.load(path, map_location="cpu", weights_only=True)
-        actor_sd = ckpt.get("actor_state_dict", ckpt)
-        self.actor.load_state_dict(actor_sd)
+        self.rl_token.load_state_dict(filtered, strict=True)
 
     # ------------------------------------------------------------------
     # PI05 lazy loading
@@ -460,17 +455,13 @@ class RLTPretrainedPolicy(PreTrainedPolicy):
         pretrained_name_or_path: str | Path,
         *,
         config: PreTrainedConfig | None = None,
-        strict: bool = False,
+        strict: bool = True,
         **kwargs,
     ) -> RLTPretrainedPolicy:
-        """Load RLT policy.
-
-        Uses strict=False by default because the PI05 sub-module is not in the
-        safetensors file.
-        """
+        """Load the complete RL head. PI05 weights load lazily."""
         return super().from_pretrained(
             pretrained_name_or_path,
             config=config,
-            strict=False,
+            strict=strict,
             **kwargs,
         )

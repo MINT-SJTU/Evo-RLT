@@ -23,6 +23,7 @@ from evo_rlt.core.actor import ChunkActor
 from evo_rlt.core.critic import TwinCritic
 from evo_rlt.core.losses import actor_loss, critic_loss
 from evo_rlt.core.phase_controller import PhaseController
+from evo_rlt.core.rl_token import RLTokenModule
 from evo_rlt.core.utils import soft_update
 
 log = logging.getLogger(__name__)
@@ -225,12 +226,15 @@ class ChunkACPolicy(PreTrainedPolicy):
     # Inference: predict_action_chunk + select_action
     # ------------------------------------------------------------------
 
+    @property
+    def rl_token(self) -> RLTokenModule:
+        return self._rl_token_policy.rl_token
+
     def _ensure_modifier(self) -> RLTActionModifier:
         if self.modifier is None:
             phase_ctrl = self._build_phase_controller()
-            rl_token_module = self._rl_token_policy.rl_token
             self.modifier = RLTActionModifier(
-                rl_token=rl_token_module,
+                rl_token=self.rl_token,
                 actor=self.actor,
                 phase_ctrl=phase_ctrl,
                 chunk_length=self.config.chunk_length,

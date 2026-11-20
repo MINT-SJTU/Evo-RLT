@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -16,6 +18,21 @@ from evo_rlt.adapters.lerobot.record.annotations import (
     resolve_episode_success_label,
 )
 from evo_rlt.core.replay_buffer import ReplayBuffer
+from evo_rlt.core.rl_token import RLTokenModule
+from evo_rlt.core.utils import filter_encoder_only
+
+
+def _encoder_fingerprint(rl_token: RLTokenModule) -> str:
+    """Identify the encoder that produced the stored RL-token features."""
+    digest = hashlib.sha256()
+    num_heads = rl_token.encoder.layers[0].self_attn.num_heads
+    digest.update(f"{num_heads}\n".encode())
+    weights, _ = filter_encoder_only(rl_token.state_dict())
+    for name, tensor in sorted(weights.items()):
+        digest.update(json.dumps((name, str(tensor.dtype), tuple(tensor.shape))).encode())
+        bytes_view = tensor.detach().cpu().contiguous().view(torch.uint8)
+        digest.update(memoryview(bytes_view.numpy()))
+    return digest.hexdigest()
 
 
 class RecordingOnlineReplay:
@@ -26,14 +43,35 @@ class RecordingOnlineReplay:
         self.preprocessor = preprocessor
         self.cache_dir = Path(cache_dir)
         self._chunk_observation: dict | None = None
+        self._cache_path = self.cache_dir / "chunk_transitions_train.pt"
+        self._fingerprint_path = self.cache_dir / "rl_token_encoder.sha256"
+        self._fingerprint = _encoder_fingerprint(policy.rl_token)
+        self._validate_encoder()
         self.buffer = (
             load_transition_cache(self.cache_dir, "train")
-            if (self.cache_dir / "chunk_transitions_train.pt").exists()
+            if self._cache_path.exists()
             else ReplayBuffer()
         )
         self.collector = RLTOnlineCollector(
             self.buffer, policy.config.chunk_length, policy.config.action_dim
         )
+
+    def _validate_encoder(self, *, initialize: bool = False) -> None:
+        if self._fingerprint_path.exists():
+            if self._fingerprint_path.read_text().strip() != self._fingerprint:
+                raise ValueError(
+                    f"RL-token encoder fingerprint mismatch for {self.cache_dir}. "
+                    "Use the original encoder or start a new online replay cache."
+                )
+        elif self._cache_path.exists():
+            raise ValueError(
+                f"Online replay cache {self.cache_dir} has no RL-token encoder fingerprint. "
+                "Start a new online replay cache."
+            )
+        elif initialize:
+            self.cache_dir.mkdir(parents=True, exist_ok=True)
+            with self._fingerprint_path.open("x") as fingerprint_file:
+                fingerprint_file.write(f"{self._fingerprint}\n")
 
     def start_episode(self, episode_id: int) -> None:
         self.collector.start_episode(episode_id)
@@ -84,6 +122,7 @@ class RecordingOnlineReplay:
         label = resolve_episode_success_label(
             explicit_label=episode_success, require_label=True
         )
+        self._validate_encoder(initialize=True)
         self.collector.flush_episode(label == EPISODE_SUCCESS)
         self._chunk_observation = None
         save_transition_cache(list(self.buffer.buffer), self.cache_dir, "train")

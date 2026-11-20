@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import torch
 from torch.utils.data import DataLoader, Subset
@@ -309,7 +310,10 @@ def save_transition_cache(
         }
         for t in transitions
     ]
-    torch.save(data, path)
+    with TemporaryDirectory(dir=transition_cache_dir) as temp_dir:
+        temp_path = Path(temp_dir) / path.name
+        torch.save(data, temp_path)
+        temp_path.replace(path)
     logger.info("Saved %d transitions to %s", len(data), path)
 
 

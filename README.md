@@ -336,7 +336,10 @@ episodes receive only zeros. Episodes enter replay only after their outcome is
 confirmed and the recording is saved; rerecorded episodes are discarded.
 The cache is saved atomically to `<DATASET_ROOT>/online_replay/chunk_transitions_train.pt`
 and can be passed directly to actor-critic training via `--dataset.repo_id`.
-Resuming recording reloads the existing replay cache (up to 200,000 chunks).
+Resuming recording reloads up to 200,000 chunks after checking the saved RL-token
+encoder fingerprint. If you change encoders or the cache has no fingerprint,
+archive the existing `online_replay` directory before resuming. Rebuild offline
+transition caches with the new encoder before training the actor-critic.
 
 Online replay uses the deployed SFT preprocessor for executed actions, including
 human intervention, and encodes the current observation/reference every chunk
