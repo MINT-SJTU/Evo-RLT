@@ -267,7 +267,7 @@ a new normalized RL-token module instead.
 ### 5) Build Transition Cache
 
 ```bash
-evo-rlt-build-transition-cache-v2 \
+evo-rlt-build-transition-cache \
   --demo-dataset-repo-id <HF_ORG>/<DATASET> \
   --demo-dataset-root <LOCAL_DATASET_ROOT> \
   --rl-token-policy-path outputs/rl_token/checkpoints/last/pretrained_model \
@@ -283,6 +283,31 @@ evo-rlt-build-transition-cache-v2 \
   --tolerance-s 0.04 \
   --device cuda
 ```
+
+The source dataset must contain an `episode_success` value (`success` or
+`failure`) for every episode. The cache uses sparse binary rewards: only the
+last valid step of a successful terminal chunk receives reward `1`; all other
+steps receive `0`.
+
+**Migrating existing cache scripts**
+
+- Change `evo-rlt-build-transition-cache-v2` to `evo-rlt-build-transition-cache`.
+  Choose a positive `--frame-stride` that divides `--chunk-length`. Rebuild
+  existing caches to use the corrected rewards and camera selection.
+- For the older `evo-rlt-build-transition-cache` interface, replace
+  `--demo-dataset-path` with `--demo-dataset-root` and supply
+  `--demo-dataset-repo-id`. Replace `--transition-cache-dir` with `--output-dir`.
+- Supply the SFT pi0.5 directory via `--vla-pretrained-path` (formerly
+  `--model-path`) and the exported RL Token policy directory via
+  `--rl-token-policy-path` (formerly a standalone `--rl-token-checkpoint`).
+  The builder reads the settings formerly passed via `--active-cameras`,
+  `--image-only`, `--token-pool-size`, `--num-rl-tokens` and `--dtype` from
+  the policy config. Use `--norm-stats-path` if the saved normalization stats
+  have moved. The trained policy replaces `--placeholder` and the training
+  YAML previously passed via `--config`.
+- `--train-ratio` assigns episodes to training and the remainder to validation.
+  The builder has retired `--val-ratio` and the separate test split. It marks
+  all output transitions as critical, so scripts can remove `--mark-critical`.
 
 <a id="train-chunk-actor-critic"></a>
 
