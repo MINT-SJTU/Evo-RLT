@@ -8,16 +8,28 @@ import torch
 from torch.utils.data import Dataset
 
 
-def test_transition_cache_passes_video_backend(monkeypatch, tmp_path):
+@pytest.mark.parametrize(
+    ("active_camera_indices", "expected_token"),
+    [([1], 2.5), (None, 1.5)],
+)
+def test_cache_cli_uses_checkpoint_camera_selection(
+    monkeypatch, tmp_path, active_camera_indices, expected_token
+):
     module = pytest.importorskip("evo_rlt.cli.build_transition_cache")
+    from evo_rlt.adapters.lerobot.policies.dataset_rlt_ac import ChunkTransitionDataset
 
     captured = {}
 
-    class FakeDataset:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-            self.num_episodes = 0
-            self.meta = SimpleNamespace(episodes=None)
+    def load_dataset(**kwargs):
+        captured.update(kwargs)
+        dataset = _FrameDataset(num_frames=3, chunk_length=2, action_dim=2)
+        dataset.num_episodes = 1
+        dataset.meta = SimpleNamespace(episodes={
+            "dataset_from_index": [0],
+            "dataset_to_index": [3],
+            "episode_success": ["success"],
+        })
+        return dataset
 
     class FakeMetadata:
         fps = 20
@@ -25,18 +37,34 @@ def test_transition_cache_passes_video_backend(monkeypatch, tmp_path):
         def __init__(self, **kwargs):
             pass
 
+    # Two tokens per camera, followed by a language token.
+    prefix = torch.tensor([0.0, 1.0, 2.0, 3.0, 100.0]).view(1, 5, 1)
+
+    def forward(batch_size):
+        return [prefix.expand(batch_size, -1, -1), None], None
+
+    backbone = SimpleNamespace(forward=forward)
+
+    def predict_action_chunk(batch):
+        backbone.forward(batch["action"].shape[0])
+        return batch["action"]
+
     class FakePolicy:
         config = SimpleNamespace(
-            action_dim=12,
-            chunk_size=50,
-            image_only=False,
-            proprio_dim=12,
-            token_pool_size=0,
+            action_dim=2,
+            image_only=True,
+            proprio_dim=2,
+            token_pool_size=1,
+            active_camera_indices=active_camera_indices,
+            num_per_camera=2,
             vla_pretrained_path=None,
         )
-        _num_image_tokens = 0
-        _pi05 = object()
-        rl_token = object()
+        _num_image_tokens = 4
+        _pi05 = SimpleNamespace(
+            model=SimpleNamespace(paligemma_with_expert=backbone),
+            predict_action_chunk=predict_action_chunk,
+        )
+        rl_token = _RLToken()
 
         def to(self, device):
             return self
@@ -44,17 +72,7 @@ def test_transition_cache_passes_video_backend(monkeypatch, tmp_path):
         def eval(self):
             return self
 
-    class FakeCapture:
-        def __init__(self, **kwargs):
-            pass
-
-        def attach(self, pi05):
-            pass
-
-        def detach(self):
-            pass
-
-    monkeypatch.setattr(module, "LeRobotDataset", FakeDataset)
+    monkeypatch.setattr(module, "LeRobotDataset", load_dataset)
     monkeypatch.setattr(module, "LeRobotDatasetMetadata", FakeMetadata)
 
     def load_config(path, cli_overrides):
@@ -68,8 +86,7 @@ def test_transition_cache_passes_video_backend(monkeypatch, tmp_path):
         "from_pretrained",
         lambda path, config: FakePolicy(),
     )
-    monkeypatch.setattr(module, "PrefixOutputCapture", FakeCapture)
-    monkeypatch.setattr(module, "make_rlt_token_pre_post_processors", lambda config: (object(), object()))
+    monkeypatch.setattr(module, "make_rlt_token_pre_post_processors", lambda config: (lambda batch: batch, None))
     monkeypatch.setattr(
         sys,
         "argv",
@@ -89,8 +106,14 @@ def test_transition_cache_passes_video_backend(monkeypatch, tmp_path):
             "/tmp/tokenizer",
             "--output-dir",
             str(tmp_path),
-            "--max-episodes",
+            "--chunk-length",
+            "2",
+            "--num-workers",
             "0",
+            "--train-ratio",
+            "1",
+            "--device",
+            "cpu",
             "--video-backend",
             "video_reader",
         ],
@@ -98,6 +121,10 @@ def test_transition_cache_passes_video_backend(monkeypatch, tmp_path):
 
     module.main()
 
+    cache = ChunkTransitionDataset(tmp_path)
+    assert len(cache) == 1
+    assert cache[0]["state_vec"][0].item() == expected_token
+    assert cache[0]["next_state_vec"][0].item() == expected_token
     assert captured["video_backend"] == "video_reader"
     assert captured["delta_timestamps"]["action"][1] == pytest.approx(0.05)
     assert captured["config_path"] == "/tmp/rl-token"

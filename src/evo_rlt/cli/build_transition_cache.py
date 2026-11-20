@@ -309,6 +309,8 @@ def main() -> None:
         token_pool_size=cfg.token_pool_size,
         image_only=cfg.image_only,
         num_image_tokens=policy._num_image_tokens,
+        num_per_camera=cfg.num_per_camera,
+        active_camera_indices=cfg.active_camera_indices,
     )
     capture.attach(policy._pi05)
     try:

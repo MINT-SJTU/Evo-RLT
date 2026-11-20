@@ -30,10 +30,14 @@ class PrefixOutputCapture:
         token_pool_size: int = 64,
         image_only: bool = False,
         num_image_tokens: int = 0,
+        num_per_camera: int = 0,
+        active_camera_indices: list[int] | None = None,
     ):
         self.token_pool_size = token_pool_size
         self.image_only = image_only
         self.num_image_tokens = num_image_tokens
+        self.num_per_camera = num_per_camera
+        self.active_camera_indices = active_camera_indices
         self._captured: Tensor | None = None
         self._original_forward = None
         self._target = None
@@ -63,6 +67,8 @@ class PrefixOutputCapture:
                     image_only=capture.image_only,
                     num_image_tokens=capture.num_image_tokens,
                     pool_size=capture.token_pool_size,
+                    num_per_camera=capture.num_per_camera,
+                    active_camera_indices=capture.active_camera_indices,
                 )
             return result
 
